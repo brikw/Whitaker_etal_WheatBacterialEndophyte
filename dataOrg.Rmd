@@ -1,0 +1,635 @@
+---
+title: "Bacterial Endophyte Project - Data organization"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+author: "Briana K. Whitaker"
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning=FALSE, message=FALSE)
+```
+
+* Run using `r version[['version.string']] `.
+
+# Objective
+This document reports on the analysis of Rep1 from the GRIP2 bacterial endophyte inoculation in wheat expt. 
+
+# Details
+Seeds of two wheat varieties Norm and Alsen, with susceptible and moderate resistance to FHb respectively, were inoculated with one of 7 bacterial endophytes or a mock inoculum. Endophytes obtained and reported on previously Whitaker & Bakker 2019 FEMS-ME. Leaf level physiology data was taken just prior heading for all plants. Plants were inoculated with Fusarium graminearum GZ3639 or mock inoculum via point inoculation at anthesis. Disease score data collected across several days post infection (DPI). Fresh mass taken on heads collected 18dpi. Norm and Alsen developed at different rates, therefore GZ3639 inoculation was spaced apart by one week out of necessity.
+
+# Important Phys definitions  
+- Phi2 = Quantum Yield of Photosystem II
+"This measurement is essentially the percentage of incoming light (excited electrons) that go into Photosystem II."
+- PhiNO = Ratio of light lost to non-regulated processes. 
+"A combination of unregulated processes whose by-products can inhibit photosynthesis or be harmful to the plant"
+- PhiNPQ = Ratio of light that goes to NPQ, 
+"The plant regulates energy usage to reduce damage to itself"
+- NPQt = Non-photochemical quenching estimate. 
+"The amount of incoming light that is regulated away from photosynthetic processes in order to reduce damage to the plant."
+- ECSt = maximum amplitude of Electrochromic Shift, after the start of the Dark Interval Relaxation Kinetic (DIRK). Measurement is related the build up of energy/protons across the thylakoid membrane, which is related to production of ATP and NADPH needed to make sugars, and ATP-Synthase activity
+- gH+ = Proton conductivity
+- vH+ = Steady-State Proton Flux
+
+
+
+# Load packages
+```{r, echo = FALSE, results='hide'}
+#devtools::install_github("datalorax/equatiomatic")
+
+### packages
+x <- c("tidyverse", "dplyr", "ggplot2", "RColorBrewer", 
+       "agricolae", "equatiomatic", "egg")  #"nlme", 
+lapply(x, require, character.only = TRUE)
+
+
+
+
+### functions and read-in source code
+source("./code/multiplot.function.R")
+
+get.pot <- function(fname) strsplit(fname, "[.]")[[1]][1] 
+get.plant <- function(fname) strsplit(fname, "[.]")[[1]][2] 
+get.pot2 <- function(fname) strsplit(fname, "[ ]")[[1]][1] 
+get.plant2 <- function(fname) strsplit(fname, "[ ]")[[1]][2] 
+
+## leaf phys functions
+#Murray FW (1967) On the computation of saturation vapor pressure. 
+#    J. Appl. Meteorol. 6: 203-204.
+# requires air Temp as degrees in Celsius
+# requires RH as a % relative humidity of the air surrounding the leaf
+airVPD <- function(Temp, RH) {    
+   SVP <- 610.78*exp((Temp*17.2694)/(238.3+Temp))
+   VPD <- SVP*(1-RH/100)
+   VPD
+}
+# Similar inputs as airVPD, but additional parameter required of leaf temperature
+#  difference from ambient (i.e., "deltaT")
+leafVPD <- function(Temp, RH, deltaT) {
+   airSVP <- 610.78*exp((Temp*17.2694)/(238.3+Temp))
+   leafSVP <- 610.78*exp(((Temp+deltaT)*17.2694)/(238.3+(Temp+deltaT)))
+   leafVPD <- leafSVP-(airSVP*(RH/100))
+   leafVPD
+}
+
+
+#
+CV <- function(x) {
+    x1 <- na.omit(x)
+    MEAN <- mean(x1)
+    SD <- sd(x1)
+    CV <- MEAN/SD
+    CV
+}
+myMEAN <- function(x) {
+    x1 <- na.omit(x)  #number of omitted values length(attr(test,"na.action"))
+    MEAN <- mean(x1)
+}
+mySD <- function(x) {
+    x1 <- na.omit(x)  #number of omitted values length(attr(test,"na.action"))
+    SD <- sd(x1)
+}
+
+myREP <- function(x) {
+    x1 <- na.omit(x)  #number of omitted values length(attr(test,"na.action"))
+    REP <- length(x1) #number of values used in mean
+}
+
+
+
+# micro treatment colors
+# display.brewer.pal(8, "Dark2") #assumes Phal is first in order
+# brewer.pal(8, "Dark2")
+micro_color_neg <- c("#666666", "#1B9E77", "#D95F02", "#7570B3", "#E7298A", 
+                 "#66A61E", "#E6AB02", "#A6761D", "black") 
+
+micro_color <- micro_color_neg[-1]
+
+# set ggplot2 theme
+theme_set(theme_bw(base_size=16)) 
+theme_update(panel.grid.major=element_line(0), panel.grid.minor=element_line(0))
+
+```
+
+
+# Load data
+```{r, results='hide'}
+### read in design and plant-level datasets
+design <- read.csv("./data/GRIP2_ExperimentalDesign_Pot_2021-06-15.csv")
+names(design)[1] <- "fullPotID"
+disease <- read.table("./data/GRIP2_ExperimentalDesign_Plant_2021-09-13.txt", sep = "", header = TRUE)
+toxin <- read.csv("./data/GRIP2_DON_data_2022-01-28.csv")  #note- manually edited neg and pos control ids to match disease excel
+qPCR <- read.csv("./data/GRIP2_qPCR_data_2022-04-27.csv")  # also manually edited neg/pos
+#read in phys data
+b1 <- read.csv("./data/GRIP2_MultispeQ_Block1_2021-07-27.csv")
+b2 <- read.csv("./data/GRIP2_MultispeQ_Block2_2021-07-28.csv")
+b3 <- read.csv("./data/GRIP2_MultispeQ_Block3_2021-07-29.csv")
+#identical(names(b2), names(b3))  #sanity check
+phys <- rbind(b1, b2,b3)
+```
+
+```{r, echo = FALSE, results='hide'}
+
+### format datasets
+# make factors
+design$fullPotID <- as.factor(design$fullPotID); design$potID <- as.factor(design$potID);
+design$hostVar <- as.factor(design$hostVar); design$bacteria <- as.factor(design$bacteria);
+design$Fusarium <- as.factor(design$Fusarium); design$control <- as.factor(design$control);
+design$block <- as.factor(design$block); design$bench <- as.factor(design$bench);
+design$microTrt <- as.factor(design$microTrt)
+
+disease$plantID <- as.factor(disease$plantID ); disease$fullPotID <- as.factor(disease$fullPotID );
+disease$hostVar <- as.factor(disease$hostVar ); disease$potID <- as.factor(disease$potID );
+disease$plantRep <- as.factor(disease$plantRep ); disease$RNASeq <- as.factor(disease$RNASeq );
+disease$Notes <- as.factor(disease$Notes)
+
+phys$ID <- as.factor(phys$ID); phys$Series <- as.factor(phys$Series);
+phys$Notes <- as.factor(phys$Notes); phys$Sample_ID <- as.character(phys$Sample_ID);
+phys$pump <- as.factor(phys$pump); phys$Notes_postMeasure <- as.factor(phys$Notes_postMeasure)
+
+#add treatment info to pot data set
+disease$bacteria <- design$bacteria[match(disease$potID, design$potID)]
+disease$Fusarium <- design$Fusarium[match(disease$potID, design$potID)]
+disease$microTrt <- design$microTrt[match(disease$potID, design$potID)]
+disease$block <- design$block[match(disease$potID, design$potID)]
+
+# reorder microbial treatment variable
+disease$microTrt <- factor(disease$microTrt, 
+    levels = c("NEG", "A30", "Q16", "Q22", "W14", "Y108", "Y11", "Y2", "POS"))
+#levels(disease$microTrt)
+
+# break apart treatment and plant rep info in toxin data
+toxin$fullPotID <- sapply(toxin$plantID, get.pot2)
+toxin$plantRep <- sapply(toxin$plantID, get.plant2)
+toxin %>% select(-plantID, -DON_ID) -> toxin
+# make factors for toxin data
+toxin$fullPotID <- as.factor(toxin$fullPotID); toxin$plantRep <- as.factor(toxin$plantRep);
+
+
+# break apart treatment and plant rep info in qPCR data
+qPCR$fullPotID <- sapply(qPCR$plantID, get.pot2)
+qPCR$plantRep <- sapply(qPCR$plantID, get.plant2)
+qPCR %>% select(-plantID, -qPCR_ID) -> qPCR
+# make factors for qPCR data
+qPCR$fullPotID <- as.factor(qPCR$fullPotID); qPCR$plantRep <- as.factor(qPCR$plantRep);
+
+```
+
+### remove RNA seq plants and dud plant that got pulled
+```{r, results='hide'}
+
+disease1 <- disease[disease$RNASeq=="NO",]
+disease1 <- disease1[disease1$plantID!="42-5",]
+# convert disease score to percentages
+disease1$disPerc.d7 <- ((disease1$disS.d7/disease1$totSpikelets)*100)
+disease1$disPerc.d10 <- ((disease1$disS.d10/disease1$totSpikelets)*100)
+disease1$disPerc.d14 <- ((disease1$disS.d14/disease1$totSpikelets)*100)
+disease1$disPerc.d17 <- ((disease1$disS.d17/disease1$totSpikelets)*100)
+```
+
+### Add toxin & qPCR data to disease dataset
+```{r, results='hide'}
+
+# identical(sort(levels(toxin$fullPotID)), sort(levels(disease1$fullPotID))) #TRUE
+# identical(sort(levels(qPCR$fullPotID)), sort(levels(disease1$fullPotID))) #TRUE
+# identical(sort(levels(toxin$fullPotID)), sort(levels(qPCR$fullPotID))) #TRUE sanity checks
+
+disease1a <- merge(disease1, toxin, by=c("fullPotID", "plantRep"), all.x = TRUE)
+#head(disease1a)
+disease2 <- merge(disease1a, qPCR, by=c("fullPotID", "plantRep"), all.x = TRUE)
+#head(disease2)
+```
+
+### construct AUDPC (relative)
+* "The AUDPC is the area that is determined by the sum of trapezes under the curve."
+* absolute gives the absolute value of the trapezoidal sums, while relative divides the sum of trapezoids by the total rectangular area if 100% disease was observed from start to finish (bounds [0,1])
+```{r, results='hide'}
+#define dates
+dates <- c(7,10,14,17)  #days post infection
+
+disease2$AUDPC <-audpc(
+    disease2[, c("disPerc.d7", "disPerc.d10", "disPerc.d14", "disPerc.d17")], 
+    dates, type = "relative")
+
+# construct DON per unit Fg biomass
+disease2$DON_per_Fg <- disease2$ugDON_per_g/(disease2$FgTa+0.05)
+
+```
+
+
+
+
+### Streamline MultispeQ output
+```{r, results='hide'}
+# set pot and plant rep IDs
+phys$Pot_ID <- as.factor(unname(sapply(phys$Sample_ID, get.pot)))
+phys$plant_rep <- as.factor(unname(sapply(phys$Sample_ID, get.plant)))
+
+#write.csv(phys, "./data/GRIP2_MultispeQ_AllBlocks.csv")
+
+# remove multi-value vrbls (raw data from multispeQ) and useless vrbls for this dataset
+phys2 <- phys %>% select(-Series, -Repeat, -air_temp_kinetics, -data_raw_PAM,
+    -ECS_averaged_trace, -fitinput, -humidity2_K, -humidity_K, -LEAF_temp, 
+    -Leaf.Temperature.Differenial, -LEFd_trace, -outdata, 
+    -P700_DIRK_averaged_trace, -P700_fitinput, -P700_outdata, 
+    -PSI_data_absorbance, -Latitude, -Longitude)
+#Leaf.Temperature.Differenial # note this is same data as Leaf.Temperature.Differential but column header mispelled
+
+# merge with design matrix
+phys3 <- merge(design, phys2, by.x = "potID", by.y = 'Pot_ID', all.x = TRUE, all.y = TRUE)
+
+# make factors
+phys3$potID <- as.factor(phys3$potID)
+phys3$plant_rep <- as.factor(phys3$plant_rep)
+phys3$hostVar <- as.factor(phys3$hostVar)
+phys3$bacteria <- as.factor(phys3$bacteria)
+phys3$Fusarium <- as.factor(phys3$Fusarium)
+phys3$control <- as.factor(phys3$control)
+phys3$block <- as.factor(phys3$block)
+
+phys3$Day <- as.Date(phys3$time, format='%m/%d/%Y %H:%M')
+
+```
+
+
+# Visualize & Outlier Determination
+
+### Insepct Climate
+```{r, echo = FALSE, results = 'hide', fig.width = 8, fig.height = 8}
+# looking for outliers and at the climate during the measurements
+
+#ggplot(phys3, aes( y = Phi2, x = Time.of.Day)) + geom_point()
+clim1 <- ggplot(phys3, aes( y = Ambient.Humidity, x = Time.of.Day, 
+           colour = factor(Day))) + geom_point() + guides(colour = "none")
+clim2 <- ggplot(phys3, aes( y = Ambient.Temperature, x = Time.of.Day, 
+           colour = factor(Day))) + geom_point() + 
+           theme(legend.justification=c(1,0), legend.position=c(1,0))
+clim3 <- ggplot(phys3, aes( y = Ambient.Pressure, x = Time.of.Day,
+           colour = factor(Day))) + geom_point() + guides(colour = "none")
+clim4 <- ggplot(phys3, aes( y = Light.Intensity..PAR., x = Time.of.Day, 
+           colour = factor(Day))) + geom_point() + guides(colour = "none")
+# ggplot(phys3, aes( y = Leaf.Temperature.Differential, x = Time.of.Day, 
+#            colour = factor(Day))) + geom_point()
+# clim1
+# clim2
+# clim3
+# clim4  
+# table(phys3$Light.Intensity..PAR.<260)
+
+#tiff("./figures/phys-climate-timeOfDay.tiff", width = 10, height = 10, units="in", res=600)
+multiplot(clim1, clim2, clim3, clim4, cols = 2)
+#dev.off()
+```
+
+* maybe three light intensity outliers, all <260
+
+### LEF, PAR, vH+, gH+, ECSt
+```{r, echo = FALSE, results = 'hide', fig.width = 8, fig.height = 8}
+# looking for outliers
+b1 <- ggplot(phys3[phys3$block==1,], aes( y = LEF, x = Light.Intensity..PAR., 
+           colour = factor(Day))) + geom_point() + 
+           theme(legend.justification=c(1,0), legend.position=c(1,0))
+b2 <- ggplot(phys3[phys3$block==2,], aes( y = LEF, x = Light.Intensity..PAR., 
+           colour = factor(Day))) + geom_point() + 
+           theme(legend.justification=c(1,0), legend.position=c(1,0))
+b3 <- ggplot(phys3[phys3$block==3,], aes( y = LEF, x = Light.Intensity..PAR., 
+           colour = factor(Day))) + geom_point() + 
+           theme(legend.justification=c(1,0), legend.position=c(1,0))
+vH <- ggplot(phys3, aes( y = gH., x = Light.Intensity..PAR., 
+           colour = factor(Day))) + geom_point() + 
+           theme(legend.justification=c(1,1), legend.position=c(1,1))
+#tiff("./figures/phys-PAR-LEF.tiff", width = 10, height = 10, units="in", res=600)
+multiplot(b1, b2, b3, vH, cols = 2)
+#dev.off()
+
+# ggplot(phys3, aes( y = Phi2, x = Ambient.Temperature, 
+#            colour = factor(Day))) + geom_point()
+
+```
+
+* outlier in block 2, PAR ~250
+* outlier in block 3, PAR ~248
+* outlier in block 3, vH. ~0.28; 
+* and in Block 2 another where vH. slightly negative; 
+* outlier in block 3, gH. ~1200;
+* and in block 2 another where gH. slightly negative;
+* ECSt seems fine (but note, one slightly higher point removed when gH. and vH. removed)
+
+### Remove Phys Outliers
+```{r, results = 'hide'}
+phys3 %>% filter(Light.Intensity..PAR. >= 251) -> out1
+dim(phys3); dim(out1)  #removed 2 outliers, one each from block 2 and 3 (leaves in a maybe outlier in block 1)
+out1 %>% filter(gH. >= 0) %>% filter(gH. <= 260) -> out2
+dim(out1); dim(out2)  #removed 2 outliers, one each from block 2 and 3
+out2 %>% filter(vH. >= 0) %>% filter(vH. <= 0.100) -> out3
+dim(out2); dim(out3)  #nothing removed, 
+```
+* vH and gH outliers were the same measurements
+
+```{r, results = 'hide', fig.width = 3.5, fig.height = 3.5}
+hist(out3$leaf_thickness)
+```
+* Also, removed one clear outlier from leaf thickness measurements
+
+
+```{r, results = 'hide'}
+out3 %>% filter(leaf_thickness <= 1.0) -> out4
+dim(out3); dim(out4)  
+
+out4 -> phys4
+```
+
+### Remove Disease Outliers
+
+* one pot in Block 1, Alsen, was accidentally inoculated with Fusarium, though it was supposed to be a mock inoculation
+
+```{r, results = 'hide'}
+disease2 %>% filter(microTrt != 'NEG' | block != 1 | hostVar != 'Alsen') -> disease3
+dim(disease2); dim(disease3)
+```
+
+### Create same Disease dataset, without NEG treatment
+```{r, results = 'hide'}
+disease4 <- disease3 %>% filter (microTrt != 'NEG')
+dim(disease3); dim(disease4)
+disease4 <- droplevels(disease4)
+```
+
+
+
+# Organize pot means data
+```{r, echo = FALSE, results = 'hide'}
+# change to dash, to match disease4
+subdotdash <- function(fname) gsub("[.]", "-", fname)
+phys4$Sample_ID <- as.factor(unname(sapply(phys4$Sample_ID, subdotdash)))
+
+# add vpd 
+phys4$aVPD <- airVPD(phys4$Ambient.Temperature, phys4$Ambient.Humidity)
+phys4$lVPD <- leafVPD(phys4$Ambient.Temperature, phys4$Ambient.Humidity, phys4$Leaf.Temperature.Differential)
+```
+
+* Because of plant removals from different datasets, it may be better to analyze the phys-disease combo data as a pot level average (otherwise, we lose too much data)
+
+```{r}
+# #missing plants
+# table(phys4$fullPotID) #A27-Q16-F+, A41-B-/-F+, N19-Y2-F+, N34-Q22-F+, N52-Y108-F+ all only have 2 plants/pot (instead of 3)
+# table(disease4$fullPotID)  #A42-Q16-F+ only has 3 plants/pot (instead of 4)
+# 
+# # problems with merging:
+# #1) RNAseq plants removed from disease4 (54 plants removed)
+# #2) negative control treatments remvoed from disease4 (48 pots not 54 pots, 24 plants removed)
+# #3) weak plant removed from disease4 (1 plant removed)
+# #4) bad phys plants removed form phys4 (5 plants removed)
+# # -- these plant removals don't overlap
+# 
+```
+
+### Phys Means
+```{r}
+phys.means <- data.frame(
+    hostVar=c(levels(phys4$hostVar)),
+    microTrt = c(rep(levels(phys4$microTrt), each = 2)),
+    block=c(rep(levels(phys4$block), each = 18)),
+
+    #physiology
+    Phi2means=as.vector(tapply(phys4$Phi2, list(phys4$hostVar, phys4$microTrt, phys4$block), myMEAN)),
+    Phi2sd=as.vector(tapply(phys4$Phi2, list(phys4$hostVar, phys4$microTrt, phys4$block), mySD)),
+    Phi2reps=as.vector(tapply(phys4$Phi2, list(phys4$hostVar, phys4$microTrt, phys4$block), myREP)),
+
+    PhiNOmeans=as.vector(tapply(phys4$PhiNO, list(phys4$hostVar, phys4$microTrt, phys4$block), myMEAN)),
+    PhiNOsd=as.vector(tapply(phys4$PhiNO, list(phys4$hostVar, phys4$microTrt, phys4$block), mySD)),
+    PhiNOreps=as.vector(tapply(phys4$PhiNO, list(phys4$hostVar, phys4$microTrt, phys4$block), myREP)),
+
+    PhiNPQmeans=as.vector(tapply(phys4$PhiNPQ, list(phys4$hostVar, phys4$microTrt, phys4$block), myMEAN)),
+    PhiNPQsd=as.vector(tapply(phys4$PhiNPQ, list(phys4$hostVar, phys4$microTrt, phys4$block), mySD)),
+    PhiNPQreps=as.vector(tapply(phys4$PhiNPQ, list(phys4$hostVar, phys4$microTrt, phys4$block), myREP)),
+
+    NPQtmeans=as.vector(tapply(phys4$NPQt, list(phys4$hostVar, phys4$microTrt, phys4$block), myMEAN)),
+    NPQtsd=as.vector(tapply(phys4$NPQt, list(phys4$hostVar, phys4$microTrt, phys4$block), mySD)),
+    NPQtreps=as.vector(tapply(phys4$NPQt, list(phys4$hostVar, phys4$microTrt, phys4$block), myREP)),
+
+    vH.means=as.vector(tapply(phys4$vH., list(phys4$hostVar, phys4$microTrt, phys4$block), myMEAN)),
+    vH.sd=as.vector(tapply(phys4$vH., list(phys4$hostVar, phys4$microTrt, phys4$block), mySD)),
+    vH.reps=as.vector(tapply(phys4$vH., list(phys4$hostVar, phys4$microTrt, phys4$block), myREP)),
+
+    gH.means=as.vector(tapply(phys4$gH., list(phys4$hostVar, phys4$microTrt, phys4$block), myMEAN)),
+    gH.sd=as.vector(tapply(phys4$gH., list(phys4$hostVar, phys4$microTrt, phys4$block), mySD)),
+    gH.reps=as.vector(tapply(phys4$gH., list(phys4$hostVar, phys4$microTrt, phys4$block), myREP)),
+
+    ECStmeans=as.vector(tapply(phys4$ECSt.mAU, list(phys4$hostVar, phys4$microTrt, phys4$block), myMEAN)),
+    ECStsd=as.vector(tapply(phys4$ECSt.mAU, list(phys4$hostVar, phys4$microTrt, phys4$block), mySD)),
+    ECStreps=as.vector(tapply(phys4$ECSt.mAU, list(phys4$hostVar, phys4$microTrt, phys4$block), myREP)),
+    
+    LEFmeans=as.vector(tapply(phys4$LEF, list(phys4$hostVar, phys4$microTrt, phys4$block), myMEAN)),
+    LEFsd=as.vector(tapply(phys4$LEF, list(phys4$hostVar, phys4$microTrt, phys4$block), mySD)),
+    LEFreps=as.vector(tapply(phys4$LEF, list(phys4$hostVar, phys4$microTrt, phys4$block), myREP)),
+
+    #morphology
+    leaf_thicknessmeans=as.vector(tapply(phys4$leaf_thickness, list(phys4$hostVar, phys4$microTrt, phys4$block), myMEAN)),
+    leaf_thicknesssd=as.vector(tapply(phys4$leaf_thickness, list(phys4$hostVar, phys4$microTrt, phys4$block), mySD)),
+    leaf_thicknessreps=as.vector(tapply(phys4$leaf_thickness, list(phys4$hostVar, phys4$microTrt, phys4$block), myREP)),
+
+    SPADmeans=as.vector(tapply(phys4$SPAD, list(phys4$hostVar, phys4$microTrt, phys4$block), myMEAN)),
+    SPADsd=as.vector(tapply(phys4$SPAD, list(phys4$hostVar, phys4$microTrt, phys4$block), mySD)),
+    SPADreps=as.vector(tapply(phys4$SPAD, list(phys4$hostVar, phys4$microTrt, phys4$block), myREP)),
+
+    # Temp, RH, deltaT, PAR?
+    Humidmeans=as.vector(tapply(phys4$Ambient.Humidity, list(phys4$hostVar, phys4$microTrt, phys4$block), myMEAN)),
+    Humidsd=as.vector(tapply(phys4$Ambient.Humidity, list(phys4$hostVar, phys4$microTrt, phys4$block), mySD)),
+    Humidreps=as.vector(tapply(phys4$Ambient.Humidity, list(phys4$hostVar, phys4$microTrt, phys4$block), myREP)),
+
+    Tempmeans=as.vector(tapply(phys4$Ambient.Temperature, list(phys4$hostVar, phys4$microTrt, phys4$block), myMEAN)),
+    Tempsd=as.vector(tapply(phys4$Ambient.Temperature, list(phys4$hostVar, phys4$microTrt, phys4$block), mySD)),
+    Tempreps=as.vector(tapply(phys4$Ambient.Temperature, list(phys4$hostVar, phys4$microTrt, phys4$block), myREP)),
+
+    deltaTmeans=as.vector(tapply(phys4$Leaf.Temperature.Differential, list(phys4$hostVar, phys4$microTrt, phys4$block), myMEAN)),
+    deltaTsd=as.vector(tapply(phys4$Leaf.Temperature.Differential, list(phys4$hostVar, phys4$microTrt, phys4$block), mySD)),
+    deltaTreps=as.vector(tapply(phys4$Leaf.Temperature.Differential, list(phys4$hostVar, phys4$microTrt, phys4$block), myREP)),
+
+    PARmeans=as.vector(tapply(phys4$Light.Intensity..PAR., list(phys4$hostVar, phys4$microTrt, phys4$block), myMEAN)),
+    PARsd=as.vector(tapply(phys4$Light.Intensity..PAR., list(phys4$hostVar, phys4$microTrt, phys4$block), mySD)),
+    PARreps=as.vector(tapply(phys4$Light.Intensity..PAR., list(phys4$hostVar, phys4$microTrt, phys4$block), myREP)),
+
+    aVPDmeans=as.vector(tapply(phys4$aVPD, list(phys4$hostVar, phys4$microTrt, phys4$block), myMEAN)),
+    aVPDsd=as.vector(tapply(phys4$aVPD, list(phys4$hostVar, phys4$microTrt, phys4$block), mySD)),
+    aVPDreps=as.vector(tapply(phys4$aVPD, list(phys4$hostVar, phys4$microTrt, phys4$block), myREP)),
+
+    lVPDmeans=as.vector(tapply(phys4$lVPD, list(phys4$hostVar, phys4$microTrt, phys4$block), myMEAN)),
+    lVPDsd=as.vector(tapply(phys4$lVPD, list(phys4$hostVar, phys4$microTrt, phys4$block), mySD)),
+    lVPDreps=as.vector(tapply(phys4$lVPD, list(phys4$hostVar, phys4$microTrt, phys4$block), myREP))
+           )
+
+# then add SE
+phys.means$Phi2se <- (phys.means$Phi2sd)/sqrt(phys.means$Phi2reps)
+phys.means$PhiNOse <- (phys.means$PhiNOsd)/sqrt(phys.means$PhiNOreps)
+phys.means$PhiNPQse <- (phys.means$PhiNPQsd)/sqrt(phys.means$PhiNPQreps)
+phys.means$NPQtse <- (phys.means$NPQtsd)/sqrt(phys.means$NPQtreps)
+phys.means$vH.se <- (phys.means$vH.sd)/sqrt(phys.means$vH.reps)
+phys.means$gH.se <- (phys.means$gH.sd)/sqrt(phys.means$gH.reps)
+phys.means$ECStse <- (phys.means$ECStsd)/sqrt(phys.means$ECStreps)
+phys.means$LEFse <- (phys.means$LEFsd)/sqrt(phys.means$LEFreps)
+phys.means$leaf_thicknessse <- (phys.means$leaf_thicknesssd)/sqrt(phys.means$leaf_thicknessreps)
+phys.means$SPADse <- (phys.means$SPADsd)/sqrt(phys.means$SPADreps)
+phys.means$Humidse <- (phys.means$Humidsd)/sqrt(phys.means$Humidreps)
+phys.means$Tempse <- (phys.means$Tempsd)/sqrt(phys.means$Tempreps)
+phys.means$deltaTse <- (phys.means$deltaTsd)/sqrt(phys.means$deltaTreps)
+phys.means$PARse <- (phys.means$PARsd)/sqrt(phys.means$PARreps)
+phys.means$aVPDse <- (phys.means$aVPDsd)/sqrt(phys.means$aVPDreps)
+phys.means$lVPDse <- (phys.means$lVPDsd)/sqrt(phys.means$lVPDreps)
+```
+
+### Disease Means
+```{r}
+dis.means <- data.frame(
+    hostVar=c(levels(disease3$hostVar)),
+    microTrt = c(rep(levels(disease3$microTrt), each = 2)),
+    block=c(rep(levels(disease3$block), each = 18)),
+
+    headmeans=as.vector(tapply(disease3$head.mass, list(disease3$hostVar, disease3$microTrt, disease3$block), myMEAN)),
+    headsd=as.vector(tapply(disease3$head.mass, list(disease3$hostVar, disease3$microTrt, disease3$block), mySD)),
+    headreps=as.vector(tapply(disease3$head.mass, list(disease3$hostVar, disease3$microTrt, disease3$block), myREP)),
+
+    d17means=as.vector(tapply(disease3$disPerc.d17, list(disease3$hostVar, disease3$microTrt, disease3$block), myMEAN)),
+    d17sd=as.vector(tapply(disease3$disPerc.d17, list(disease3$hostVar, disease3$microTrt, disease3$block), mySD)),
+    d17sreps=as.vector(tapply(disease3$disPerc.d17, list(disease3$hostVar, disease3$microTrt, disease3$block), myREP)),
+
+    AUDPCmeans=as.vector(tapply(disease3$AUDPC, list(disease3$hostVar, disease3$microTrt, disease3$block), myMEAN)),
+    AUDPCsd=as.vector(tapply(disease3$AUDPC, list(disease3$hostVar, disease3$microTrt, disease3$block), mySD)),
+    AUDPCreps=as.vector(tapply(disease3$AUDPC, list(disease3$hostVar, disease3$microTrt, disease3$block), myREP)),
+
+    DONmeans=as.vector(tapply(disease3$ugDON_per_g, list(disease3$hostVar, disease3$microTrt, disease3$block), myMEAN)),
+    DONsd=as.vector(tapply(disease3$ugDON_per_g, list(disease3$hostVar, disease3$microTrt, disease3$block), mySD)),
+    DONreps=as.vector(tapply(disease3$ugDON_per_g, list(disease3$hostVar, disease3$microTrt, disease3$block), myREP)),
+
+    FgTameans=as.vector(tapply(disease3$FgTa, list(disease3$hostVar, disease3$microTrt, disease3$block), myMEAN)),
+    FgTasd=as.vector(tapply(disease3$FgTa, list(disease3$hostVar, disease3$microTrt, disease3$block), mySD)),
+    FgTareps=as.vector(tapply(disease3$FgTa, list(disease3$hostVar, disease3$microTrt, disease3$block), myREP))
+    )
+
+# then add SE
+dis.means$headse <- (dis.means$headsd)/sqrt(dis.means$headreps)
+dis.means$d17se <- (dis.means$d17sd)/sqrt(dis.means$d17sreps)
+dis.means$AUDPCse <- (dis.means$AUDPCsd)/sqrt(dis.means$AUDPCreps)
+dis.means$DONse <- (dis.means$DONsd)/sqrt(dis.means$DONreps)
+dis.means$FgTase <- (dis.means$FgTasd)/sqrt(dis.means$FgTareps)
+```
+
+### Combine to one dataset
+```{r}
+pot <- merge(dis.means, phys.means, by = c("hostVar", "microTrt", "block"))
+
+pot %>% dplyr::select(-ends_with("sd")) %>% dplyr::select(-ends_with("reps")) -> pot2
+```
+
+# Organize TREATMENT means data
+```{r}
+phys.trt <- data.frame(
+    hostVar=c(levels(phys4$hostVar)),
+    bacteria = c(rep(levels(phys4$bacteria), each = 2)),
+
+    #physiology
+    Phi2means=as.vector(tapply(phys4$Phi2, list(phys4$hostVar, phys4$bacteria), myMEAN)),
+    Phi2sd=as.vector(tapply(phys4$Phi2, list(phys4$hostVar, phys4$bacteria), mySD)),
+    Phi2reps=as.vector(tapply(phys4$Phi2, list(phys4$hostVar, phys4$bacteria), myREP)),
+
+    PhiNOmeans=as.vector(tapply(phys4$PhiNO, list(phys4$hostVar, phys4$bacteria), myMEAN)),
+    PhiNOsd=as.vector(tapply(phys4$PhiNO, list(phys4$hostVar, phys4$bacteria), mySD)),
+    PhiNOreps=as.vector(tapply(phys4$PhiNO, list(phys4$hostVar, phys4$bacteria), myREP)),
+
+    PhiNPQmeans=as.vector(tapply(phys4$PhiNPQ, list(phys4$hostVar, phys4$bacteria), myMEAN)),
+    PhiNPQsd=as.vector(tapply(phys4$PhiNPQ, list(phys4$hostVar, phys4$bacteria), mySD)),
+    PhiNPQreps=as.vector(tapply(phys4$PhiNPQ, list(phys4$hostVar, phys4$bacteria), myREP)),
+
+    vH.means=as.vector(tapply(phys4$vH., list(phys4$hostVar, phys4$bacteria), myMEAN)),
+    vH.sd=as.vector(tapply(phys4$vH., list(phys4$hostVar, phys4$bacteria), mySD)),
+    vH.reps=as.vector(tapply(phys4$vH., list(phys4$hostVar, phys4$bacteria), myREP)),
+
+    gH.means=as.vector(tapply(phys4$gH., list(phys4$hostVar, phys4$bacteria), myMEAN)),
+    gH.sd=as.vector(tapply(phys4$gH., list(phys4$hostVar, phys4$bacteria), mySD)),
+    gH.reps=as.vector(tapply(phys4$gH., list(phys4$hostVar, phys4$bacteria), myREP)),
+    
+    ECStmeans=as.vector(tapply(phys4$ECSt.mAU, list(phys4$hostVar, phys4$bacteria), myMEAN)),
+    ECStsd=as.vector(tapply(phys4$ECSt.mAU, list(phys4$hostVar, phys4$bacteria), mySD)),
+    ECStreps=as.vector(tapply(phys4$ECSt.mAU, list(phys4$hostVar, phys4$bacteria), myREP)),
+
+    #morphology
+    leaf_thicknessmeans=as.vector(tapply(phys4$leaf_thickness, list(phys4$hostVar, phys4$bacteria), myMEAN)),
+    leaf_thicknesssd=as.vector(tapply(phys4$leaf_thickness, list(phys4$hostVar, phys4$bacteria), mySD)),
+    leaf_thicknessreps=as.vector(tapply(phys4$leaf_thickness, list(phys4$hostVar, phys4$bacteria), myREP)),
+
+    SPADmeans=as.vector(tapply(phys4$SPAD, list(phys4$hostVar, phys4$bacteria), myMEAN)),
+    SPADsd=as.vector(tapply(phys4$SPAD, list(phys4$hostVar, phys4$bacteria), mySD)),
+    SPADreps=as.vector(tapply(phys4$SPAD, list(phys4$hostVar, phys4$bacteria), myREP))
+           )
+
+# then add SE
+phys.trt$Phi2se <- (phys.trt$Phi2sd)/sqrt(phys.trt$Phi2reps)
+phys.trt$PhiNOse <- (phys.trt$PhiNOsd)/sqrt(phys.trt$PhiNOreps)
+phys.trt$PhiNPQse <- (phys.trt$PhiNPQsd)/sqrt(phys.trt$PhiNPQreps)
+phys.trt$vH.se <- (phys.trt$vH.sd)/sqrt(phys.trt$vH.reps)
+phys.trt$gH.se <- (phys.trt$gH.sd)/sqrt(phys.trt$gH.reps)
+phys.trt$ECStse <- (phys.trt$ECStsd)/sqrt(phys.trt$ECStreps)
+phys.trt$leaf_thicknessse <- (phys.trt$leaf_thicknesssd)/sqrt(phys.trt$leaf_thicknessreps)
+phys.trt$SPADse <- (phys.trt$SPADsd)/sqrt(phys.trt$SPADreps)
+
+
+dis.trt <- data.frame(
+    hostVar=c(levels(disease3$hostVar)),
+    microTrt = c(rep(levels(disease3$microTrt), each = 2)),
+
+    AUDPCmeans=as.vector(tapply(disease3$AUDPC, list(disease3$hostVar, disease3$microTrt), myMEAN)),
+    AUDPCsd=as.vector(tapply(disease3$AUDPC, list(disease3$hostVar, disease3$microTrt), mySD)),
+    AUDPCreps=as.vector(tapply(disease3$AUDPC, list(disease3$hostVar, disease3$microTrt), myREP)),
+
+    DONmeans=as.vector(tapply(disease3$ugDON_per_g, list(disease3$hostVar, disease3$microTrt), myMEAN)),
+    DONsd=as.vector(tapply(disease3$ugDON_per_g, list(disease3$hostVar, disease3$microTrt), mySD)),
+    DONreps=as.vector(tapply(disease3$ugDON_per_g, list(disease3$hostVar, disease3$microTrt), myREP)),
+
+    FgTameans=as.vector(tapply(disease3$FgTa, list(disease3$hostVar, disease3$microTrt), myMEAN)),
+    FgTasd=as.vector(tapply(disease3$FgTa, list(disease3$hostVar, disease3$microTrt), mySD)),
+    FgTareps=as.vector(tapply(disease3$FgTa, list(disease3$hostVar, disease3$microTrt), myREP))
+    )
+
+# then add SE
+dis.trt$AUDPCse <- (dis.trt$AUDPCsd)/sqrt(dis.trt$AUDPCreps)
+dis.trt$DONse <- (dis.trt$DONsd)/sqrt(dis.trt$DONreps)
+dis.trt$FgTase <- (dis.trt$FgTasd)/sqrt(dis.trt$FgTareps)
+
+```
+
+### Remove excess variables
+* keep the treatment datasets for phys and disease separate
+* Just used for figures
+* allows for difference in bacteria treatment for phys vs. the entire microbial treatment (microTrt), inclusive of the pathogen inoculation, for disease dataset
+```{r}
+phys.trt %>% dplyr::select(-ends_with("sd")) %>% dplyr::select(-ends_with("reps")) -> phys.trt2
+dis.trt %>% dplyr::select(-ends_with("sd")) %>% dplyr::select(-ends_with("reps")) -> dis.trt2
+```
+
+
+
+
+# Write out datasets
+```{r}
+#write.csv(pot2, "./data/GRIP2_Pot_Means_2022-08-09.csv")
+##write.csv(phys4, "./data/GRIP2_phys_2022-07-13.csv") #messes up Sample_ID column
+#write.table(phys4, "./data/GRIP2_phys_2022-07-13.txt")
+#write.csv(disease3, "./data/GRIP2_disease_2022-07-13.csv")
+#write.csv(disease4, "./data/GRIP2_diseaseNoNeg_2022-07-13.csv")  #same as disease3, but without NEG
+#write.csv(phys.trt2, "./data/GRIP2_PhysTreatment_Means_2022-08-09.csv")
+#write.csv(dis.trt2, "./data/GRIP2_DiseaseTreatment_Means_2022-08-03.csv")
+```
+
+
+
+
+
+# End - Session Info
+```{r}
+sessionInfo()
+```
+

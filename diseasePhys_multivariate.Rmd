@@ -1,0 +1,739 @@
+---
+title: "Bacterial Endophyte Project - Multivariate Analyses"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+author: "Briana K. Whitaker"
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning=FALSE, message=FALSE)
+```
+
+* Run using `r version[['version.string']] `.
+
+# Load packages
+```{r, echo = FALSE, results='hide'}
+### packages
+x <- c("tidyverse", "dplyr", "ggplot2", "car", "lme4", "RColorBrewer", "egg")  #"nlme", 
+lapply(x, require, character.only = TRUE)
+
+### functions and read-in source code
+source("./code/multiplot.function.R")
+
+get.pot <- function(fname) strsplit(fname, "[.]")[[1]][1] 
+get.plant <- function(fname) strsplit(fname, "[.]")[[1]][2] 
+get.pot2 <- function(fname) strsplit(fname, "[ ]")[[1]][1] 
+get.plant2 <- function(fname) strsplit(fname, "[ ]")[[1]][2] 
+
+## leaf phys functions
+#Murray FW (1967) On the computation of saturation vapor pressure. 
+#    J. Appl. Meteorol. 6: 203-204.
+# requires air Temp as degrees in Celsius
+# requires RH as a % relative humidity of the air surrounding the leaf
+airVPD <- function(Temp, RH) {    
+   SVP <- 610.78*exp((Temp*17.2694)/(238.3+Temp))
+   VPD <- SVP*(1-RH/100)
+   VPD
+}
+# Similar inputs as airVPD, but additional parameter required of leaf temperature
+#  difference from ambient (i.e., "deltaT")
+leafVPD <- function(Temp, RH, deltaT) {
+   airSVP <- 610.78*exp((Temp*17.2694)/(238.3+Temp))
+   leafSVP <- 610.78*exp(((Temp+deltaT)*17.2694)/(238.3+(Temp+deltaT)))
+   leafVPD <- leafSVP-(airSVP*(RH/100))
+   leafVPD
+}
+
+#
+CV <- function(x) {
+    x1 <- na.omit(x)
+    MEAN <- mean(x1)
+    SD <- sd(x1)
+    CV <- MEAN/SD
+    CV
+}
+myMEAN <- function(x) {
+    x1 <- na.omit(x)  #number of omitted values length(attr(test,"na.action"))
+    MEAN <- mean(x1)
+}
+mySD <- function(x) {
+    x1 <- na.omit(x)  #number of omitted values length(attr(test,"na.action"))
+    SD <- sd(x1)
+}
+
+myREP <- function(x) {
+    x1 <- na.omit(x)  #number of omitted values length(attr(test,"na.action"))
+    REP <- length(x1) #number of values used in mean
+}
+
+# micro treatment colors
+# display.brewer.pal(8, "Dark2") #assumes Phal is first in order
+# brewer.pal(8, "Dark2")
+micro_color_neg <- c("#666666", "#1B9E77", "#D95F02", "#7570B3", "#E7298A", 
+                 "#66A61E", "#E6AB02", "#A6761D", "black") 
+
+micro_color <- micro_color_neg[-1]
+
+# set ggplot2 theme
+theme_set(theme_bw(base_size=12)) 
+theme_update(panel.grid.major=element_line(0), panel.grid.minor=element_line(0))
+
+```
+
+
+# Load data
+```{r}
+disease3 <- read.csv("./data/GRIP2_disease_2022-07-13.csv", row.names = 1,
+                     stringsAsFactors = TRUE)
+disease4 <- read.csv("./data/GRIP2_diseaseNoNeg_2022-07-13.csv", row.names = 1,
+                     stringsAsFactors = TRUE)
+pot     <- read.csv("./data/GRIP2_Pot_Means_2022-08-09.csv", row.names = 1,
+                     stringsAsFactors = TRUE)
+phys4    <- read.delim("./data/GRIP2_phys_2022-07-13.txt", sep = " ", row.names = 1,
+                     stringsAsFactors = TRUE)
+```
+
+```{r, echo = FALSE, results='hide'}
+disease3$plantRep <- as.factor(disease3$plantRep)
+disease3$potID <- as.factor(disease3$potID)
+disease3$block <- as.factor(disease3$block)
+disease3$microTrt <- factor(disease3$microTrt, 
+    levels = c("NEG", "A30", "Q16", "Q22", "W14", "Y108", "Y11", "Y2", "POS"))
+
+disease4$plantRep <- as.factor(disease4$plantRep)
+disease4$potID <- as.factor(disease4$potID)
+disease4$block <- as.factor(disease4$block)
+disease4$microTrt <- factor(disease4$microTrt, 
+    levels = c(       "A30", "Q16", "Q22", "W14", "Y108", "Y11", "Y2", "POS"))
+
+
+phys4$potID <- as.factor(phys4$potID)
+phys4$block <- as.factor(phys4$block)
+phys4$bench <- as.factor(phys4$bench)
+phys4$ID <- as.factor(phys4$ID)
+phys4$plant_rep <- as.factor(phys4$plant_rep)
+phys4$bacteria <- factor(phys4$bacteria, 
+    levels = c("NO", "A30", "Q16", "Q22", "W14", "Y108", "Y11", "Y2"))
+levels(phys4$bacteria)[1] <- "NONE"
+
+pot$block <- as.factor(pot$block)
+
+# str(disease3)
+# str(disease4)
+# str(phys4)
+# str(pot)
+
+```
+
+
+
+# Remove effects of environmental covariates from pot-level Phys. vars.
+* Remove Negative control treatment from this analysis
+```{r, echo = FALSE, results = 'hide'}
+pot$microTrt <- factor(pot$microTrt, levels = c("NEG", "A30", "Q16", "Q22", "W14", "Y108", "Y11", "Y2","POS"))
+
+pot2 <- pot[pot$microTrt != "NEG",]
+pot2 <- droplevels(pot2)
+```
+
+* Use BIC/SBC criterion, k = log(n), where n=48 pots
+* Evaluating for ~ >2 difference in BIC
+
+```{r}
+phitwo.p0a <- lm(Phi2means ~ Tempmeans + PARmeans + lVPDmeans, data = pot2)
+phitwo.p0b <- lm(Phi2means ~ 1, data = pot2)
+phitwo.back <- step(phitwo.p0a, direction="backward", k = log(48), 
+                    scope = c(lower = ~ 1))
+phitwo.fwd <- step(phitwo.p0b, direction="forward", k = log(48),
+                    scope = c(upper = ~ Tempmeans + PARmeans + lVPDmeans))
+# both agree, only Tempmeans
+phitwo.p1 <- lm(Phi2means ~ Tempmeans, data = pot2)
+```
+
+```{r}
+phino.p0a <- lm(PhiNOmeans ~ Tempmeans + PARmeans + lVPDmeans, data = pot2)
+phino.p0b <- lm(PhiNOmeans ~ 1, data = pot2)
+phino.back <- step(phino.p0a, direction="backward", k = log(48), 
+                    scope = c(lower = ~ 1))
+phino.fwd <- step(phino.p0b, direction="forward", k = log(48), 
+                    scope = c(upper = ~ Tempmeans + PARmeans + lVPDmeans))
+#do not agree, but either one of Tempmeans or lVPDmeans (but not both) has substantial improvements to BIC in either direction, while PAR either has no effect or makes BIC worse
+phino.p1 <- lm(PhiNOmeans ~ Tempmeans, data = pot2)
+```
+
+```{r}
+phinpq.p0a <- lm(PhiNPQmeans ~ Tempmeans + PARmeans + lVPDmeans, data = pot2)
+phinpq.p0b <- lm(PhiNPQmeans ~ 1, data = pot2)
+phinpq.back <- step(phinpq.p0a, direction="backward", k = log(48), 
+                    scope = c(lower = ~ 1))
+phinpq.fwd <- step(phinpq.p0b, direction="forward", k = log(48), 
+                    scope = c(upper = ~ Tempmeans + PARmeans + lVPDmeans))
+# both agree, no predictors
+phinpq.p1 <- lm(PhiNPQmeans ~ 1, data = pot2)
+```
+
+```{r}
+npqt.p0a <- lm(NPQtmeans ~ Tempmeans + PARmeans + lVPDmeans, data = pot2)
+npqt.p0b <- lm(NPQtmeans ~ 1, data = pot2)
+npqt.back <- step(npqt.p0a, direction="backward",
+                    scope = c(lower = ~ 1))
+npqt.fwd <- step(npqt.p0b, direction="forward",
+                    scope = c(upper = ~ Tempmeans + PARmeans + lVPDmeans))
+# agree, lVPD
+npqt.p1 <- lm(NPQtmeans ~ lVPDmeans, data = pot2)
+```
+
+```{r}
+vH.p0a <- lm(vH.means ~ Tempmeans + PARmeans + lVPDmeans, data = pot2)
+vH.p0b <- lm(vH.means ~ 1, data = pot2)
+vH.back <- step(vH.p0a, direction="backward", k = log(48), 
+                    scope = c(lower = ~ 1))
+vH.fwd <- step(vH.p0b, direction="forward", k = log(48), 
+                    scope = c(upper = ~ Tempmeans + PARmeans + lVPDmeans))
+# agree, PAR
+vH.p1 <- lm(vH.means ~ PARmeans, data = pot2)
+```
+
+```{r}
+gH.p0a <- lm(gH.means ~ Tempmeans + PARmeans + lVPDmeans, data = pot2)
+gH.p0b <- lm(gH.means ~ 1, data = pot2)
+gH.back <- step(gH.p0a, direction="backward", k = log(48), 
+                    scope = c(lower = ~ 1))
+gH.fwd <- step(gH.p0b, direction="forward", k = log(48), 
+                    scope = c(upper = ~ Tempmeans + PARmeans + lVPDmeans))
+# agree, lVPD
+gH.p1 <- lm(gH.means ~ lVPDmeans, data = pot2)
+```
+
+```{r}
+ecs.p0a <- lm(ECStmeans ~ Tempmeans + PARmeans + lVPDmeans, data = pot2)
+ecs.p0b <- lm(ECStmeans ~ 1, data = pot2)
+ecs.back <- step(ecs.p0a, direction="backward", k = log(48), 
+                    scope = c(lower = ~ 1))
+ecs.fwd <- step(ecs.p0b, direction="forward", k = log(48), 
+                    scope = c(upper = ~ Tempmeans + PARmeans + lVPDmeans))
+# agree, PAR + lVPD
+ecs.p1 <- lm(ECStmeans ~ PARmeans + lVPDmeans, data = pot2)
+```
+
+```{r}
+LEF.p0a <- lm(LEFmeans ~ Tempmeans + PARmeans + lVPDmeans, data = pot2)
+LEF.p0b <- lm(LEFmeans ~ 1, data = pot2)
+LEF.back <- step(LEF.p0a, direction="backward", k = log(48), 
+                    scope = c(lower = ~ 1))
+LEF.fwd <- step(LEF.p0b, direction="forward", k = log(48), 
+                    scope = c(upper = ~ Tempmeans + PARmeans + lVPDmeans))
+# agree, Temp+ PAR (PAR VERY important to keep) -- LEF probably too dependent on PAR
+LEF.p1 <- lm(LEFmeans ~ Tempmeans + PARmeans, data = pot2)
+```
+
+```{r, fig.width = 8, fig.height = 5}
+par(mfrow = c(2,3))
+
+plot(phitwo.p1$residuals)
+anova(phitwo.p1) # temp signif
+summary(phitwo.p1)$adj.r.squared #<0.10
+coef(phitwo.p1)
+
+plot(phino.p1$residuals)
+anova(phino.p1) #temp signif
+summary(phino.p1)$adj.r.squared #<0.20
+coef(phino.p1)
+
+plot(phinpq.p1$residuals)
+anova(phinpq.p1)
+summary(phinpq.p1)$adj.r.squared
+coef(phinpq.p1)
+
+# plot(npqt.p1$residuals)
+# anova(npqt.p1) # lVPD not signif
+# summary(npqt.p1)$adj.r.squared
+# coef(npqt.p1)
+
+plot(vH.p1$residuals)
+anova(vH.p1) # PAR signif
+summary(vH.p1)$adj.r.squared # <0.15
+coef(vH.p1)
+
+plot(gH.p1$residuals)    #slight trend
+anova(gH.p1) # lVPD signif
+summary(gH.p1)$adj.r.squared #<0.10
+coef(gH.p1)
+
+plot(ecs.p1$residuals)    
+anova(ecs.p1) # PAR signif, lVPD semi-signif
+summary(ecs.p1)$adj.r.squared #~0.20
+coef(ecs.p1)
+
+# plot(LEF.p1$residuals)
+# anova(LEF.p1) # PAR very signif, temp signif
+# summary(LEF.p1)$adj.r.squared  #!
+# coef(LEF.p1)
+
+par(mfrow = c(1,1))
+```
+
+```{r}
+# # extra plots of LEF for checking dependencies
+# plot(LEF.p1$residuals ~ pot2$LEFmeans)
+# plot(pot2$LEFmeans ~ pot2$PARmeans) # extremely strong relationship
+# plot(pot2$LEFmeans ~ pot2$Tempmeans)
+```
+
+
+```{r}
+pot2 <- data.frame(pot2, 
+        Phi2resids = summary(phitwo.p1)$residuals,
+        PhiNOresids = summary(phino.p1)$residuals,
+        PhiNPQresids = summary(phinpq.p1)$residuals,
+        #NPQtresids = summary(npqt.p1)$residuals,
+        ECStresids = summary(ecs.p1)$residuals,
+        vHresids = summary(vH.p1)$residuals,
+        gHresids = summary(gH.p1)$residuals       #,
+        #LEFresids = summary(LEF.p1)$residuals
+        )
+```
+
+```{r}
+# sanity check of resids to orig values
+plot(pot2$Phi2means ~ pot2$Phi2resids)
+
+```
+
+
+# PCA of Physiology Variables (not morph)
+
+```{r, echo = FALSE, results = 'hide'}
+#make an id for rownames
+pot2$id <- paste(pot2$hostVar,pot2$microTrt,pot2$block, sep="-")
+rownames(pot2) <- pot2$id
+
+
+pot2 %>% filter(hostVar == 'Alsen') -> potAlsen
+pot2 %>% filter(hostVar == 'Norm') -> potNorm
+```
+
+### VIFs
+```{r}
+M <- lm(Phi2resids ~., data = as.data.frame(pot2[,c(46:51)]))
+vif(M) #gHresids highest
+M <- lm(Phi2resids ~., data = as.data.frame(pot2[,c(46:50)]))
+vif(M) #all <2 after dropping gH+
+
+
+#PhiNOresids, PhiNPQresids, ECStresids, vHresids, gHresids
+
+# not inclouded in VIFs leaf_thicknessmeans, SPADmeans
+```
+
+```{r, echo = FALSE, results = 'hide'}
+# start with a dataset of all phys + morph traits
+potAlsen %>% dplyr::select(Phi2resids, PhiNOresids, PhiNPQresids,
+                       ECStresids, vHresids) -> potA_traits     #, SPADmeans, leaf_thicknessmeans
+potNorm %>% dplyr::select(Phi2resids, PhiNOresids, PhiNPQresids,
+                       ECStresids, vHresids) -> potN_traits    #, SPADmeans, leaf_thicknessmeans 
+rownames(potA_traits) <- potAlsen$id
+rownames(potN_traits) <- potNorm$id
+
+#check correlations 
+cor(potA_traits)
+cor(potN_traits)
+```
+
+## Run PCA of phys
+* Standardize data
+```{r, echo = FALSE, results = 'hide'}
+#standardize data
+potA_traits2 <- scale(potA_traits)
+potN_traits2 <- scale(potN_traits)
+#run PCA
+PCAtraitsA <- prcomp(potA_traits2, scale=TRUE)
+PCAtraitsN <- prcomp(potN_traits2, scale=TRUE)
+#PCAtraits$rotation #matrix of variable loadings
+eigtraitsA <- (PCAtraitsA$sdev)^2; eigtraitsA    #get eigenvalues
+vartraitsA <- eigtraitsA*100/sum(eigtraitsA); vartraitsA   
+cumvartraitsA <- cumsum(vartraitsA); cumvartraitsA
+vectorstraitsA <- as.data.frame(PCAtraitsA$rotation)*exp(1)
+
+eigtraitsN <- (PCAtraitsN$sdev)^2; eigtraitsN    #get eigenvalues
+vartraitsN <- eigtraitsN*100/sum(eigtraitsN); vartraitsN   
+cumvartraitsN <- cumsum(vartraitsN); cumvartraitsN
+vectorstraitsN <- as.data.frame(PCAtraitsN$rotation)*exp(1)
+```
+
+```{r}
+# variation explained by axes
+vartraitsA
+vartraitsN
+
+# loadings
+PCAtraitsA$rotation
+PCAtraitsN$rotation
+
+```
+
+* broken stick significance plot
+
+```{r, echo = FALSE, results = 'hide'}
+par(mfrow=c(1,1))
+plot(I(PCAtraitsA$sdev^2), xlab = 'PCA Axis', ylab = 'Eigenvalue', las=1, 
+     cex.lab=1.5, pch=16, main = "Alsen")
+abline(h = mean(PCAtraitsA$sdev^2), lty=2, lwd=2,col='blue')
+b.stick <- vegan::bstick(length(PCAtraitsA$sdev), tot.var=sum(eigtraitsA))
+lines(1:length(PCAtraitsA$sdev), b.stick, type="l", lty=4, lwd=2, col='red') 
+legend("topright", legend=c("Avg. Eigenvalue", "Broken Stick"), lty=c(2,4), 
+       bty="n", col=c("blue", "red"))
+
+plot(I(PCAtraitsN$sdev^2), xlab = 'PCA Axis', ylab = 'Eigenvalue', las=1, 
+     cex.lab=1.5, pch=16, main = "Norm")
+abline(h = mean(PCAtraitsN$sdev^2), lty=2, lwd=2,col='blue')
+b.stick <- vegan::bstick(length(PCAtraitsN$sdev), tot.var=sum(eigtraitsN))
+lines(1:length(PCAtraitsN$sdev), b.stick, type="l", lty=4, lwd=2, col='red') 
+legend("topright", legend=c("Avg. Eigenvalue", "Broken Stick"), lty=c(2,4), 
+       bty="n", col=c("blue", "red"))
+
+```
+
+* 3 sig axes for Alsen & Norm (Avg. Eigenvalue vs. Broken Stick Method)
+
+```{r, echo = FALSE, results = 'hide'}
+#merge with PCA with main dataframe
+PCAtraits2A <- data.frame(ID=rownames(PCAtraitsA$x),PCAtraitsA$x)
+PCAtraits3A <- merge(PCAtraits2A, potAlsen, by.x=c("ID"), by.y=c("id"), 
+      all.y=TRUE)
+rownames(PCAtraits3A) <- PCAtraits3A$ID
+percentagetraitsA <- paste("PC-", as.character(seq(1,5,1)), " (",    
+                     paste(as.character(round(vartraitsA,2)), "%", ")", sep=""), sep = "")
+
+PCAtraits2N <- data.frame(ID=rownames(PCAtraitsN$x),PCAtraitsN$x)
+PCAtraits3N <- merge(PCAtraits2N, potNorm, by.x=c("ID"), by.y=c("id"), 
+      all.y=TRUE)
+rownames(PCAtraits3N) <- PCAtraits3N$ID
+percentagetraitsN <- paste("PC-", as.character(seq(1,5,1)), " (", 
+                     paste(as.character(round(vartraitsN,2)), "%", ")", sep=""), sep = "")
+
+```
+
+### Alsen Phys PCA
+```{r, echo = FALSE, results = 'hide', fig.keep = 'none'}
+traitsPlotA <- 
+    ggplot(PCAtraits3A, aes(x=PC1, y=PC2)) +
+        coord_fixed() +  #ratio=5
+        geom_point(size=3.5, aes(color=microTrt)) +  #alsen squares, norm circles?
+        xlab(percentagetraitsA[1]) + ylab(percentagetraitsA[2]) +
+        scale_shape_discrete("Variety") +
+        scale_color_manual("",  values = micro_color) +
+        theme(legend.position = "bottom", 
+              axis.title = element_text(size = 13), axis.text = element_text(size = 13),
+              legend.text=element_text(size=10), legend.title=element_blank()) +
+        guides(color='none') +
+        annotate(geom = "text", x = -2.5, y = 2.5, label = "A)\nAlsen", size = 5, hjust = 0)
+
+traitsPlotVecA <- traitsPlotA + 
+    geom_segment(aes(x=0, y=0, xend=vectorstraitsA[1,1], yend=vectorstraitsA[1,2]), data=vectorstraitsA, 
+        color="#444444", size=1.2, arrow = arrow(length = unit(0.03, "npc"))) +
+        annotate("text", x = vectorstraitsA[1,1]-0.35, y = vectorstraitsA[1,2]+0.15, label = "Phi2") +
+    geom_segment(aes(x=0, y=0, xend=vectorstraitsA[2,1], yend=vectorstraitsA[2,2]), data=vectorstraitsA, 
+        color="#444444", size=1.2, arrow = arrow(length = unit(0.03, "npc"))) +
+        annotate("text", x = vectorstraitsA[2,1]-0.22, y = vectorstraitsA[2,2]+0.25, label = "PhiNO") +
+    geom_segment(aes(x=0, y=0, xend=vectorstraitsA[3,1], yend=vectorstraitsA[3,2]), data=vectorstraitsA, 
+        color="#444444", size=1.2, arrow = arrow(length = unit(0.03, "npc"))) +
+        annotate("text", x = vectorstraitsA[3,1]+0.65, y = vectorstraitsA[3,2]+0.03, label = "PhiNPQ") +
+    geom_segment(aes(x=0, y=0, xend=vectorstraitsA[4,1], yend=vectorstraitsA[4,2]), data=vectorstraitsA, 
+        color="#444444", size=1.2, arrow = arrow(length = unit(0.03, "npc"))) +
+        annotate("text", x = vectorstraitsA[4,1]-0.3, y = vectorstraitsA[4,2]+0.20, label = "ECSt") +
+    geom_segment(aes(x=0, y=0, xend=vectorstraitsA[5,1], yend=vectorstraitsA[5,2]), data=vectorstraitsA, 
+        color="#444444", size=1.2, arrow = arrow(length = unit(0.03, "npc"))) +
+        annotate("text", x = vectorstraitsA[5,1]-0.3, y = vectorstraitsA[5,2]+0.10, label = "vH+")
+    # geom_segment(aes(x=0, y=0, xend=vectorstraitsA[1,1], yend=vectorstraitsA[1,2]), data=vectorstraitsA, 
+    #     color="#444444", size=1.2, arrow = arrow(length = unit(0.03, "npc"))) +
+    #     annotate("text", x = gHVecA$x2-0.3, y = gHVecA$y2-0.05, label = "gH+")
+
+traitsPlotVecA
+
+```
+
+```{r, echo = FALSE, results = 'hide', fig.keep = 'none'}
+traitsPlotA2 <- 
+    ggplot(PCAtraits3A, aes(x=PC1, y=PC3)) +
+        coord_fixed() +  #ratio=5
+        geom_point(size=3.5, aes(color=microTrt)) +  #alsen squares, norm circles?
+        xlab(percentagetraitsA[1]) + ylab(percentagetraitsA[3]) +
+        scale_shape_discrete("Variety") +
+        scale_color_manual("",  values = micro_color) +
+        theme(legend.position = "bottom", 
+              axis.title = element_text(size = 13), axis.text = element_text(size = 13),
+              legend.text=element_text(size=10), legend.title=element_blank()) +
+        guides(color='none') +
+        annotate(geom = "text", x = -2.5, y = 1.35, label = "C)\nAlsen", size = 5, hjust = 0)
+
+traitsPlotVecA2 <- traitsPlotA2 + 
+    geom_segment(aes(x=0, y=0, xend=vectorstraitsA[1,1], yend=vectorstraitsA[1,3]), data=vectorstraitsA, 
+        color="#444444", size=1.2, arrow = arrow(length = unit(0.03, "npc"))) +
+        annotate("text", x = vectorstraitsA[1,1]-0.1, y = vectorstraitsA[1,3]-0.15, label = "Phi2") +
+    geom_segment(aes(x=0, y=0, xend=vectorstraitsA[2,1], yend=vectorstraitsA[2,3]), data=vectorstraitsA, 
+        color="#444444", size=1.2, arrow = arrow(length = unit(0.03, "npc"))) +
+        annotate("text", x = vectorstraitsA[2,1]+0.60, y = vectorstraitsA[2,3]+0, label = "PhiNO") +
+    geom_segment(aes(x=0, y=0, xend=vectorstraitsA[3,1], yend=vectorstraitsA[3,3]), data=vectorstraitsA, 
+        color="#444444", size=1.2, arrow = arrow(length = unit(0.03, "npc"))) +
+        annotate("text", x = vectorstraitsA[3,1]+0.65, y = vectorstraitsA[3,3]+0.03, label = "PhiNPQ") +
+    geom_segment(aes(x=0, y=0, xend=vectorstraitsA[4,1], yend=vectorstraitsA[4,3]), data=vectorstraitsA, 
+        color="#444444", size=1.2, arrow = arrow(length = unit(0.03, "npc"))) +
+        annotate("text", x = vectorstraitsA[4,1]-0.3, y = vectorstraitsA[4,3]-0.15, label = "ECSt") +
+    geom_segment(aes(x=0, y=0, xend=vectorstraitsA[5,1], yend=vectorstraitsA[5,3]), data=vectorstraitsA, 
+        color="#444444", size=1.2, arrow = arrow(length = unit(0.03, "npc"))) +
+        annotate("text", x = vectorstraitsA[5,1]-0.35, y = vectorstraitsA[5,3]+0.15, label = "vH+")
+    # geom_segment(aes(x=0, y=0, xend=vectorstraitsA[1,1], yend=vectorstraitsA[1,3]), data=vectorstraitsA, 
+    #     color="#444444", size=1.2, arrow = arrow(length = unit(0.03, "npc"))) +
+    #     annotate("text", x = gHVecA$x2-0.3, y = gHVecA$y2-0.05, label = "gH+")
+
+traitsPlotVecA2
+
+```
+
+### Norm Phys PCA
+```{r, echo = FALSE, results = 'hide', fig.keep = 'none'}
+traitsPlotN <- 
+    ggplot(PCAtraits3N, aes(x=PC1, y=PC2)) +
+        coord_fixed() +  #ratio=5
+        geom_point(size=3.5, aes(color=microTrt)) +  #alsen squares, norm circles?
+        xlab(percentagetraitsN[1]) + ylab(percentagetraitsN[2]) +
+        scale_shape_discrete("Variety") +
+        scale_color_manual("",  values = micro_color) +
+        theme(legend.position = "bottom", legend.margin=margin(0,0,0,0), 
+              legend.box.margin=margin(-10,-10,-6,10), legend.key.width = unit(.2, "cm"),
+              axis.title = element_text(size = 13), axis.text = element_text(size = 13),
+              legend.text=element_text(size=10), legend.title=element_blank()) +
+        guides(color = 'none') +
+        #guides(color=guide_legend(nrow=2, byrow=TRUE)) +
+        annotate(geom = "text", x = -2.8, y = 2.3, label = "B)\nNorm", size = 5, hjust = 0)
+
+traitsPlotVecN <- traitsPlotN + 
+    geom_segment(aes(x=0, y=0, xend=vectorstraitsN[1,1], yend=vectorstraitsN[1,2]), data=vectorstraitsN, 
+        color="#444444", size=1.2, arrow = arrow(length = unit(0.03, "npc"))) +
+        annotate("text", x = vectorstraitsN[1,1]-0.4, y = vectorstraitsN[1,2]-0, label = "Phi2") +
+    geom_segment(aes(x=0, y=0, xend=vectorstraitsN[2,1], yend=vectorstraitsN[2,2]), data=vectorstraitsN, 
+        color="#444444", size=1.2, arrow = arrow(length = unit(0.03, "npc"))) +
+        annotate("text", x = vectorstraitsN[2,1]-0.22, y = vectorstraitsN[2,2]-0.13, label = "PhiNO") +
+    geom_segment(aes(x=0, y=0, xend=vectorstraitsN[3,1], yend=vectorstraitsN[3,2]), data=vectorstraitsN, 
+        color="#444444", size=1.2, arrow = arrow(length = unit(0.03, "npc"))) +
+        annotate("text", x = vectorstraitsN[3,1]+0.50, y = vectorstraitsN[3,2]+0.20, label = "PhiNPQ") +
+    geom_segment(aes(x=0, y=0, xend=vectorstraitsN[4,1], yend=vectorstraitsN[4,2]), data=vectorstraitsN, 
+        color="#444444", size=1.2, arrow = arrow(length = unit(0.03, "npc"))) +
+        annotate("text", x = vectorstraitsN[4,1]-0.1, y = vectorstraitsN[4,2]-0.15, label = "ECSt") +
+    geom_segment(aes(x=0, y=0, xend=vectorstraitsN[5,1], yend=vectorstraitsN[5,2]), data=vectorstraitsN, 
+        color="#444444", size=1.2, arrow = arrow(length = unit(0.03, "npc"))) +
+        annotate("text", x = vectorstraitsN[5,1]-0.35, y = vectorstraitsN[5,2]-0.05, label = "vH+")
+    # geom_segment(aes(x=0, y=0, xend=vectorstraitsN[1,1], yend=vectorstraitsN[1,2]), data=vectorstraitsN, 
+    #     color="#444444", size=1.2, arrow = arrow(length = unit(0.03, "npc"))) +
+    #     annotate("text", x = gHVecN$x2-0.38, y = gHVecN$y2-0.05, label = "gH+")
+
+traitsPlotVecN
+```
+
+```{r, echo = FALSE, results = 'hide', fig.keep = 'none'}
+traitsPlotN2 <- 
+    ggplot(PCAtraits3N, aes(x=PC1, y=PC3)) +
+        coord_fixed() +  #ratio=5
+        geom_point(size=3.5, aes(color=microTrt)) +  #alsen squares, norm circles?
+        xlab(percentagetraitsN[1]) + ylab(percentagetraitsN[3]) +
+        scale_shape_discrete("Variety") +
+        scale_color_manual("",  values = micro_color) +
+        theme(legend.position = "bottom", legend.margin=margin(0,0,0,0), 
+              legend.box.margin=margin(-10,-10,-6,10), legend.key.width = unit(.2, "cm"),
+              axis.title = element_text(size = 13), axis.text = element_text(size = 13),
+              legend.text=element_text(size=10), legend.title=element_blank()) +
+        guides(color = 'none') +
+        #guides(color=guide_legend(nrow=2, byrow=TRUE)) +
+        annotate(geom = "text", x = -2.8, y = 2.2, label = "D)\nNorm", size = 5, hjust = 0)
+
+traitsPlotVecN2 <- traitsPlotN2 + 
+    geom_segment(aes(x=0, y=0, xend=vectorstraitsN[1,1], yend=vectorstraitsN[1,3]), data=vectorstraitsN, 
+        color="#444444", size=1.2, arrow = arrow(length = unit(0.03, "npc"))) +
+        annotate("text", x = vectorstraitsN[1,1]-0.4, y = vectorstraitsN[1,3]+0.05, label = "Phi2") +
+    geom_segment(aes(x=0, y=0, xend=vectorstraitsN[2,1], yend=vectorstraitsN[2,3]), data=vectorstraitsN, 
+        color="#444444", size=1.2, arrow = arrow(length = unit(0.03, "npc"))) +
+        annotate("text", x = vectorstraitsN[2,1]-0.22, y = vectorstraitsN[2,3]-0.15, label = "PhiNO") +
+    geom_segment(aes(x=0, y=0, xend=vectorstraitsN[3,1], yend=vectorstraitsN[3,3]), data=vectorstraitsN, 
+        color="#444444", size=1.2, arrow = arrow(length = unit(0.03, "npc"))) +
+        annotate("text", x = vectorstraitsN[3,1]+0.50, y = vectorstraitsN[3,3]+0.20, label = "PhiNPQ") +
+    geom_segment(aes(x=0, y=0, xend=vectorstraitsN[4,1], yend=vectorstraitsN[4,3]), data=vectorstraitsN, 
+        color="#444444", size=1.2, arrow = arrow(length = unit(0.03, "npc"))) +
+        annotate("text", x = vectorstraitsN[4,1], y = vectorstraitsN[4,3]+0.15, label = "ECSt") +
+    geom_segment(aes(x=0, y=0, xend=vectorstraitsN[5,1], yend=vectorstraitsN[5,3]), data=vectorstraitsN, 
+        color="#444444", size=1.2, arrow = arrow(length = unit(0.03, "npc"))) +
+        annotate("text", x = vectorstraitsN[5,1]-0.35, y = vectorstraitsN[5,3]-0.05, label = "vH+")
+    # geom_segment(aes(x=0, y=0, xend=vectorstraitsN[1,1], yend=vectorstraitsN[1,3]), data=vectorstraitsN, 
+    #     color="#444444", size=1.2, arrow = arrow(length = unit(0.03, "npc"))) +
+    #     annotate("text", x = gHVecN$x2-0.38, y = gHVecN$y2-0.05, label = "gH+")
+
+traitsPlotVecN2
+```
+
+```{r}
+#tiff("./figures/PCA Phys - Var Biplot.tiff", width = 7, height = 7, units="in", res=600)
+ggarrange(traitsPlotVecA, traitsPlotVecN, traitsPlotVecA2, traitsPlotVecN2, widths = c(1,1))
+#dev.off()
+
+```
+
+```{r, echo = FALSE, results = 'hide'}
+# tiff("./figures/PCA Phys - Var Biplot-poster.tiff", width = 7, height = 4, units="in", res=600)
+# ggarrange(traitsPlotVecA, traitsPlotVecN2, widths = c(1,1))
+# dev.off()
+```
+
+# Does Host Variety x Bacteria *indirectly* predict Disease? 
+* Indirect Effects Test
+* Backward model selection approach based on BIC
+
+```{r, echo = FALSE, results = 'hide'}
+str(pot2)  # 48 obs
+table(pot2$hostVar, pot2$microTrt)
+# 2 Var * 8 micro * 3 reps=block averages
+
+# hist(sqrt(pot2$DONmeans))
+# hist(log(pot2$FgTameans))
+# hist((pot2$AUDPCmeans)) #all bimodal
+
+```
+
+### DON
+
+#### ALsen
+```{r}
+PC.DON.A <- lm(sqrt(DONmeans) ~ PC1 + PC2 + PC3 + SPADmeans + leaf_thicknessmeans, data = PCAtraits3A)
+PC.back <- step(PC.DON.A, direction="backward", k = log(24),
+                    scope = c(lower = ~ 1))  #PC2 and SPADmeans clearly lowest BIC
+PC.DON.A <- lm(sqrt(DONmeans) ~ PC2 + SPADmeans, data = PCAtraits3A)
+Anova(PC.DON.A, type = 2)
+summary(PC.DON.A)$adj.r.squared
+coef(PC.DON.A)
+```
+
+#### Norm
+```{r}
+PC.DON.N <- lm(sqrt(DONmeans) ~ PC1 + PC2 + PC3 + SPADmeans + leaf_thicknessmeans, data = PCAtraits3N)
+PC.back <- step(PC.DON.N, direction="backward", k = log(24),
+                    scope = c(lower = ~ 1))  #leaf_thicknessmeans lowest BIC
+PC.DON.N <- lm(sqrt(DONmeans) ~ PC3 + leaf_thicknessmeans, data = PCAtraits3N)
+Anova(PC.DON.N, type = 2)
+summary(PC.DON.N)$adj.r.squared
+coef(PC.DON.N)
+```
+
+
+```{r, results = 'hide', echo = FALSE, fig.width = 8}
+pcA1 <- ggplot(data = PCAtraits3A, aes(y=DONmeans, x = PC2, colour = microTrt)) +
+    geom_point(size = 3) +
+    scale_x_continuous("PC-2") +
+    scale_y_continuous("DON", trans = "sqrt", limits = c(0,215)) +
+    scale_colour_manual(values = micro_color) +
+    geom_smooth(method = lm, formula = 'y ~ x', se = TRUE, col = "gray20", lty = 1) +
+    annotate("text", x = 1.4, y = 200, label = "A)\nAlsen", size = 4.5, hjust = 0) +
+    guides(color = 'none')
+pcA2 <- ggplot(data = PCAtraits3A, aes(y=DONmeans, x = SPADmeans, colour = microTrt)) +
+    geom_point(size = 3) +
+    scale_x_continuous("Rel. Chlorophyll Content") +
+    scale_y_continuous("DON", trans = "sqrt", limits = c(0,215)) +
+    scale_colour_manual(values = micro_color) +
+    geom_smooth(method = lm, formula = 'y ~ x', se = TRUE, col = "gray20", lty = 1) +
+    annotate("text", x = 62.5, y = 200, label = "B)\nAlsen", size = 4.5, hjust = 0) +
+    guides(color = 'none')
+
+pcN1 <- ggplot(data = PCAtraits3N, aes(y=DONmeans, x = PC3, colour = microTrt)) +
+    geom_point(size = 3) +
+    scale_x_continuous("PC-3") +
+    scale_y_continuous("DON", trans = "sqrt", limits = c(0,215)) +
+    scale_colour_manual(values = micro_color) +
+    geom_smooth(method = lm, formula = 'y ~ x', se = TRUE, col = "gray20", lty = 1) +
+    annotate("text", x = 1.3, y = 200, label = "C)\nNorm", size = 4.5, hjust = 0) +
+    guides(color = 'none')
+
+# tiff("./figures/DON ~ Phys.tiff", width = 7, height = 3.2, units="in", res=600)
+# multiplot(pcA1, pcA2, pcN1, cols = 3)
+# dev.off()
+
+```
+
+
+### FgTa
+
+#### ALsen
+```{r}
+PC.FgTa.A <- lm(log(FgTameans) ~ PC1 + PC2 + PC3 + SPADmeans + leaf_thicknessmeans, data = PCAtraits3A)
+PC.back <- step(PC.FgTa.A, direction="backward", k = log(24),
+                    scope = c(lower = ~ 1))  #PC2 and SPADmeans
+PC.FgTa.A <- lm(log(FgTameans) ~ PC2 + SPADmeans, data = PCAtraits3A)
+Anova(PC.FgTa.A, type = 2)
+summary(PC.FgTa.A)$adj.r.squared
+coef(PC.FgTa.A)
+```
+
+#### Norm
+```{r}
+PC.FgTa.N <- lm(log(FgTameans) ~ PC1 + PC2 + PC3 + SPADmeans + leaf_thicknessmeans, data = PCAtraits3N)
+PC.back <- step(PC.FgTa.N, direction="backward", k = log(24),
+                    scope = c(lower = ~ 1))  #model w/ PC3 & leafthickness, stop reducing AIC significantly,
+# BUT! nothing really a good predictor here (significance wise, very skeptically
+#   marginally significant leaf_thickness if the only thing in the model)
+PC.FgTa.N <- lm(log(FgTameans) ~ PC3 + leaf_thicknessmeans, data = PCAtraits3N)
+Anova(PC.FgTa.N, type = 2)
+summary(PC.FgTa.N)$adj.r.squared
+coef(PC.FgTa.N)
+```
+
+
+```{r, results = 'hide', echo = FALSE, fig.width = 8}
+f.pcA1 <- ggplot(data = PCAtraits3A, aes(y=FgTameans, x = PC2, colour = microTrt)) +
+    geom_point(size = 3) +
+    scale_x_continuous("PC-2") +
+    scale_y_continuous(expression(paste(italic("Fusarium")," Load")),
+                       trans = "log", breaks = c(.2,.5,1,2,5), limits = c(.1,13)) +
+    scale_colour_manual(values = micro_color) +
+    geom_smooth(method = lm, formula = 'y ~ x', se = TRUE, col = "gray20", lty = 1) +
+    annotate("text", x = 1.4, y = 11, label = "D)\nAlsen", size = 4.5, hjust = 0) +
+    guides(color = 'none')
+f.pcA2 <- ggplot(data = PCAtraits3A, aes(y=FgTameans, x = SPADmeans, colour = microTrt)) +
+    geom_point(size = 3) +
+    scale_x_continuous("Rel. Chlorophyll Content") +
+    scale_y_continuous(expression(paste(italic("Fusarium")," Load")),
+                       trans = "log", breaks = c(.2,.5,1,2,5), limits = c(.1,13)) +
+    scale_colour_manual(values = micro_color) +
+    geom_smooth(method = lm, formula = 'y ~ x', se = TRUE, col = "gray20", lty = 1) +
+    annotate("text", x = 62.5, y = 11, label = "E)\nAlsen", size = 4.5, hjust = 0) +
+    guides(color = 'none')
+
+f.pcN1 <- ggplot(data = PCAtraits3N, aes(y=FgTameans, x = leaf_thicknessmeans, colour = microTrt)) +
+    geom_point(size = 3) +
+    scale_x_continuous(expression(paste("Leaf Thickness ",mu,"M"))) +
+    scale_y_continuous(expression(paste(italic("Fusarium")," Load")),
+                       trans = "log", breaks = c(.2,.5,1,2,5), limits = c(.1,13)) +
+    scale_colour_manual(values = micro_color) +
+    geom_smooth(method = lm, formula = 'y ~ x', se = TRUE, col = "gray20", lty = 1) +
+    annotate("text", x = 0.50, y = 11, label = "F)\nNorm", size = 4.5, hjust = 0) +
+    guides(color = 'none')
+# tiff("./figures/FgTa ~ Phys biplot.tiff", width = 7, height = 4.3, units="in", res=600)
+# multiplot(f.pcA1, f.pcA2,f.pcN1, cols = 3)
+# dev.off()
+
+```
+
+```{r, results = 'hide', echo = FALSE}
+#tiff("./figures/Disease ~ Phys all plots.tiff", width = 7, height = 7, units="in", res=600)
+ggarrange(pcA1, pcA2, pcN1, f.pcA1, f.pcA2, f.pcN1, ncol = 3, nrow = 2)
+#dev.off()
+```
+
+
+
+# End - Session Info
+```{r}
+sessionInfo()
+```
+

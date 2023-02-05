@@ -1,0 +1,1635 @@
+---
+title: "Bacterial Endophyte Project - Disease & Physiology Analyses"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+author: "Briana K. Whitaker"
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning=FALSE, message=FALSE)
+```
+
+* Run using `r version[['version.string']] `.
+
+
+# Load packages
+```{r, echo = FALSE, results='hide'}
+### packages
+x <- c("tidyverse", "dplyr", "ggplot2", "car", "lme4", "RColorBrewer", "nlme",
+       "egg", "reshape2", "MuMIn") 
+lapply(x, require, character.only = TRUE)
+
+### functions and read-in source code
+source("./code/multiplot.function.R")
+
+get.pot <- function(fname) strsplit(fname, "[.]")[[1]][1] 
+get.plant <- function(fname) strsplit(fname, "[.]")[[1]][2] 
+get.pot2 <- function(fname) strsplit(fname, "[ ]")[[1]][1] 
+get.plant2 <- function(fname) strsplit(fname, "[ ]")[[1]][2] 
+
+## leaf phys functions
+#Murray FW (1967) On the computation of saturation vapor pressure. 
+#    J. Appl. Meteorol. 6: 203-204.
+# requires air Temp as degrees in Celsius
+# requires RH as a % relative humidity of the air surrounding the leaf
+airVPD <- function(Temp, RH) {    
+   SVP <- 610.78*exp((Temp*17.2694)/(238.3+Temp))
+   VPD <- SVP*(1-RH/100)
+   VPD
+}
+# Similar inputs as airVPD, but additional parameter required of leaf temperature
+#  difference from ambient (i.e., "deltaT")
+leafVPD <- function(Temp, RH, deltaT) {
+   airSVP <- 610.78*exp((Temp*17.2694)/(238.3+Temp))
+   leafSVP <- 610.78*exp(((Temp+deltaT)*17.2694)/(238.3+(Temp+deltaT)))
+   leafVPD <- leafSVP-(airSVP*(RH/100))
+   leafVPD
+}
+
+#
+CV <- function(x) {
+    x1 <- na.omit(x)
+    MEAN <- mean(x1)
+    SD <- sd(x1)
+    CV <- MEAN/SD
+    CV
+}
+myMEAN <- function(x) {
+    x1 <- na.omit(x)  #number of omitted values length(attr(test,"na.action"))
+    MEAN <- mean(x1)
+}
+mySD <- function(x) {
+    x1 <- na.omit(x)  #number of omitted values length(attr(test,"na.action"))
+    SD <- sd(x1)
+}
+
+myREP <- function(x) {
+    x1 <- na.omit(x)  #number of omitted values length(attr(test,"na.action"))
+    REP <- length(x1) #number of values used in mean
+}
+
+# micro treatment colors
+# display.brewer.pal(8, "Dark2") #assumes Phal is first in order
+# brewer.pal(8, "Dark2")
+micro_color_neg <- c("#666666", "#1B9E77", "#D95F02", "#7570B3", "#E7298A", 
+                 "#66A61E", "#E6AB02", "#A6761D", "black") 
+
+micro_color <- micro_color_neg[-1]
+
+# set ggplot2 theme
+theme_set(theme_bw(base_size=11)) 
+theme_update(panel.grid.major=element_line(0), panel.grid.minor=element_line(0))
+
+
+```
+
+
+# Load data
+```{r}
+disease3 <- read.csv("./data/GRIP2_disease_2022-07-13.csv", row.names = 1,
+                     stringsAsFactors = TRUE)
+disease4 <- read.csv("./data/GRIP2_diseaseNoNeg_2022-07-13.csv", row.names = 1,
+                     stringsAsFactors = TRUE)
+pot      <- read.csv("./data/GRIP2_Pot_Means_2022-08-09.csv", row.names = 1,
+                     stringsAsFactors = TRUE)
+phys4    <- read.delim("./data/GRIP2_phys_2022-07-13.txt", sep = " ", row.names = 1,
+                     stringsAsFactors = TRUE)
+phys.trt      <- read.csv("./data/GRIP2_PhysTreatment_Means_2022-08-09.csv", row.names = 1,
+                     stringsAsFactors = TRUE)
+dis.trt      <- read.csv("./data/GRIP2_DiseaseTreatment_Means_2022-08-03.csv", row.names = 1,
+                     stringsAsFactors = TRUE)
+```
+
+```{r, echo = FALSE, results='hide'}
+disease3$plantRep <- as.factor(disease3$plantRep)
+disease3$potID <- as.factor(disease3$potID)
+disease3$block <- as.factor(disease3$block)
+disease3$microTrt <- factor(disease3$microTrt, 
+    levels = c("NEG", "A30", "Q16", "Q22", "W14", "Y108", "Y11", "Y2", "POS"))
+
+#same datset as disease3 except no negative control
+disease4$plantRep <- as.factor(disease4$plantRep)
+disease4$potID <- as.factor(disease4$potID)
+disease4$block <- as.factor(disease4$block)
+disease4$microTrt <- factor(disease4$microTrt, 
+    levels = c(       "A30", "Q16", "Q22", "W14", "Y108", "Y11", "Y2", "POS"))
+
+
+phys4$potID <- as.factor(phys4$potID)
+phys4$block <- as.factor(phys4$block)
+phys4$bench <- as.factor(phys4$bench)
+phys4$ID <- as.factor(phys4$ID)
+phys4$plant_rep <- as.factor(phys4$plant_rep)
+phys4$bacteria <- factor(phys4$bacteria, 
+    levels = c("NO", "A30", "Q16", "Q22", "W14", "Y108", "Y11", "Y2"))
+levels(phys4$bacteria)[1] <- "NONE"
+
+pot$block <- as.factor(pot$block)
+
+phys.trt$bacteria <- factor(phys.trt$bacteria, 
+    levels = c("NO", "A30", "Q16", "Q22", "W14", "Y108", "Y11", "Y2"))
+levels(phys.trt$bacteria)[1] <- "NONE"
+dis.trt$microTrt <- factor(dis.trt$microTrt, 
+    levels = c("NEG", "A30", "Q16", "Q22", "W14", "Y108", "Y11", "Y2", "POS"))
+
+# str(disease3)
+# str(disease4)
+# str(phys4)
+# str(pot)
+
+```
+
+
+# Does Host Variety x Bacteria predict Disease?
+
+```{r, echo = FALSE, results = 'hide', fig.keep = 'none'}
+## design
+table(disease3$block, disease3$hostVar)
+table(disease3$block, disease3$microTrt)
+table(disease3$hostVar, disease3$microTrt)    #crossed factors
+table(disease3$block, disease3$microTrt, disease3$hostVar)
+table(disease3$block, disease3$potID)     #potID nested in block
+table(disease3$hostVar, disease3$potID)   #potID nested in hostVar
+table(disease3$potID, disease3$block, disease3$hostVar)
+
+```
+
+```{r, echo = FALSE, results = 'hide', fig.keep = 'none'}
+### normality
+hist(phys4$Phi2)
+hist(phys4$PhiNO)
+hist(phys4$PhiNPQ)
+hist(phys4$NPQt)
+hist(phys4$SPAD)  # clearly bimodal
+hist(log(phys4$leaf_thickness))
+hist(phys4$vH., breaks =10)
+hist(phys4$gH., breaks = 10)
+hist(phys4$ECSt.mAU, breaks = 20)
+hist(phys4$LEF)
+
+hist(sqrt(disease3$head.mass))
+hist(disease3$disPerc.d17)
+hist(disease3$AUDPC)  #bimodal
+hist(sqrt(disease3$ugDON_per_g)) # better with sqrt than log
+hist(log(disease3$FgTa)) # log, bimodal
+hist(log(disease3$DON_per_Fg), breaks = 20)
+
+```
+
+```{r, echo = FALSE, results = 'hide'}
+# explicit 'grouped factor' terms
+disease4$hostMicroBlock <- interaction(disease4$hostVar, disease4$microTrt, disease4$block, sep=":")
+disease4$microBlock <- interaction(disease4$microTrt, disease4$block, sep=":")
+```
+
+
+### Toxin
+```{r}
+tox1.a <- nlme::lme(sqrt(ugDON_per_g) ~ hostVar*microTrt, 
+        random = ~ 1|block/potID, data=disease4, method = "ML")
+tox1.b <- nlme::lme(sqrt(ugDON_per_g) ~ hostVar*microTrt, 
+        random = ~ 1|block, data=disease4, method = "ML")
+tox1.c <- lm(sqrt(ugDON_per_g) ~ hostVar*microTrt +
+             block, data=disease4)
+tox1.d <- lm(sqrt(ugDON_per_g) ~ hostVar*microTrt ,
+             data=disease4)
+
+# model with potID and block best model (as with the AUDPC)
+anova(tox1.a, tox1.b, tox1.c, tox1.d) 
+
+tox1.a <- update(tox1.a, method = "REML")
+tox1.b <- update(tox1.b, method = "REML")
+anova(tox1.a, tox1.b)  # still shows that block/potID best
+
+# best model, fit with REML
+#summary(tox1.a)
+summary(tox1.a)$tTable
+summary(tox1.a)$sigma
+
+```
+
+```{r}
+# fit same model with ML, to do LR ratio tests for pvalues
+tox2 <- nlme::lme(sqrt(ugDON_per_g) ~ hostVar*microTrt, 
+            random = ~ 1|block/potID, data=disease4, method = "ML")
+tox2.a <- update(tox2, .~. -hostVar:microTrt)
+anova(tox2, tox2.a)
+
+tox2.b <- update(tox2.a, .~. -microTrt)
+tox2.c <- update(tox2.a, .~. -hostVar)
+anova(tox2.a, tox2.b)
+
+anova(tox2.a, tox2.c)
+
+MuMIn::r.squaredGLMM(tox2, method = 'delta')
+```
+
+```{r, include = FALSE, fig.keep = 'none'}
+#Residuals
+plot(residuals(tox1.a) ~ fitted(tox1.a))
+plot(residuals(tox1.a) ~ tox1.a$data$block)
+plot(residuals(tox1.a) ~ tox1.a$data$microTrt)
+plot(residuals(tox1.a) ~ tox1.a$data$hostVar)
+    points(residuals(tox1.a) ~ tox1.a$data$hostVar)
+plot(residuals(tox1.a) ~ tox1.a$data$hostMicroBlock)
+```
+* resids good
+
+```{r}
+tapply(disease4$ugDON_per_g, disease4$hostVar, mean)
+
+tapply(disease4$ugDON_per_g, list(disease4$microTrt, disease4$hostVar), myMEAN)
+
+((137.07217-77.52103)/137.07217)*100 #N
+((52.66047-13.97963)/52.66047)*100  #A
+```
+
+
+### FgTa
+* the 0s in the Fg:ta ratios from teh qPCR dataset, which were either of failed qPCR reactions, or below the detection limit
+* to get log transformation to work, adding 0.05 to all values then doing log transform. Otherwise lowest detected value is 0.067
+```{r}
+fg1.a <- nlme::lme(log(I(FgTa+0.05)) ~ hostVar*microTrt, 
+            random = ~ 1|block/potID, data=disease4, method = "ML")
+fg1.b <- nlme::lme(log(I(FgTa+0.05)) ~ hostVar*microTrt, 
+            random = ~ 1|block, data=disease4, method = "ML")
+fg1.c <- lm(log(I(FgTa+0.05)) ~ hostVar*microTrt +
+             block, data=disease4)
+fg1.d <- lm(log(I(FgTa+0.05)) ~ hostVar*microTrt ,
+             data=disease4)
+
+# model with potID and block best model 
+anova(fg1.a, fg1.b, fg1.c, fg1.d) 
+
+fg1.a <- update(fg1.a, method = "REML")
+fg1.b <- update(fg1.b, method = "REML")
+anova(fg1.a, fg1.b)  # still shows that block/potID best
+
+# best model, fit with REML
+#summary(fg1.a)
+summary(fg1.a)$tTable
+summary(fg1.a)$sigma
+
+```
+
+```{r}
+# fit same model with ML, to do LR ratio tests for pvalues
+fg2 <- nlme::lme(log(I(FgTa+0.05)) ~ hostVar*microTrt, 
+            random = ~ 1|block/potID, data=disease4, method = "ML")
+fg2.a <- update(fg2, .~. -hostVar:microTrt)
+anova(fg2, fg2.a)
+
+fg2.b <- update(fg2.a, .~. -microTrt)
+fg2.c <- update(fg2.a, .~. -hostVar)
+anova(fg2.a, fg2.b)
+
+anova(fg2.a, fg2.c)
+
+MuMIn::r.squaredGLMM(fg2, method = 'delta')
+
+```
+
+```{r, include = FALSE, fig.keep = 'none'}
+plot(residuals(fg1.a) ~ fitted(fg1.a))
+plot(residuals(fg1.a) ~ fg1.a$data$block)
+plot(residuals(fg1.a) ~ fg1.a$data$microTrt)
+plot(residuals(fg1.a) ~ fg1.a$data$hostVar)     #Alsen residuals slightly > Norm ones, makes sense with failed rxns
+    points(residuals(fg1.a) ~ fg1.a$data$hostVar)
+plot(residuals(fg1.a) ~ fg1.a$data$hostMicroBlock)
+```
+* few outliers in Alsen, likely the failed rxns
+
+```{r}
+tapply(disease4$FgTa, disease4$hostVar, mean)
+
+tapply(disease4$FgTa, list(disease4$microTrt, disease4$hostVar), myMEAN)
+
+((5.811468-3.583676)/5.811468)*100 #N
+((1.1478049-0.5016975)/1.1478049)*100  #A
+```
+
+
+### AUDPC
+```{r}
+b1.a <- nlme::lme(AUDPC ~ hostVar*microTrt, 
+            random = ~ 1|block/potID, data=disease4, method = "ML")
+b1.b <- nlme::lme(AUDPC ~ hostVar*microTrt, 
+            random = ~ 1|block, data=disease4, method = "ML")
+b1.c <- lm(AUDPC ~ hostVar*microTrt +
+             block, data=disease4)
+b1.d <- lm(AUDPC ~ hostVar*microTrt ,
+             data=disease4)
+
+# model with potID and block best model 
+anova(b1.a, b1.b, b1.c, b1.d) 
+
+b1.a <- update(b1.a, method = "REML")
+b1.b <- update(b1.b, method = "REML")
+anova(b1.a, b1.b)  # still shows that block/potID best
+
+# best model, fit with REML
+#summary(b1.a)
+summary(b1.a)$tTable
+summary(b1.a)$sigma
+
+```
+
+```{r}
+# fit same model with ML, to do LR ratio tests for pvalues
+b2 <- nlme::lme(AUDPC ~ hostVar*microTrt, 
+            random = ~ 1|block/potID, data=disease4, method = "ML")
+b2.a <- update(b2, .~. -hostVar:microTrt)
+anova(b2, b2.a)
+
+b2.b <- update(b2.a, .~. -microTrt)
+b2.c <- update(b2.a, .~. -hostVar)
+anova(b2.a, b2.b)
+
+anova(b2.a, b2.c)
+
+MuMIn::r.squaredGLMM(b2, method = 'delta')
+
+```
+
+```{r, include = FALSE, fig.keep = 'none'}
+plot(residuals(b1.a) ~ fitted(b1.a))
+plot(residuals(b1.a) ~ b1.a$data$block)
+plot(residuals(b1.a) ~ b1.a$data$microTrt)
+plot(residuals(b1.a) ~ b1.a$data$hostVar)
+    points(residuals(b1.a) ~ b1.a$data$hostVar)
+plot(residuals(b1.a) ~ b1.a$data$hostMicroBlock)
+```
+* Resids fine
+
+```{r}
+tapply(disease4$AUDPC, disease4$hostVar, mean)
+```
+
+### DON per FgTa
+* added 0.05 to all FgTa values before having DON/FgTa 
+* still some samples with 0 DON detected, So adding value of 1 to these to get model to work. 
+```{r}
+donfg1.a <- nlme::lme(log(I(DON_per_Fg+1)) ~ hostVar*microTrt, 
+        random = ~ 1|block/potID, data=disease4, method = "ML")
+donfg1.b <- nlme::lme(log(I(DON_per_Fg+1)) ~ hostVar*microTrt, 
+        random = ~ 1|block, data=disease4, method = "ML")
+donfg1.c <- lm(log(I(DON_per_Fg+1)) ~ hostVar*microTrt +
+             block, data=disease4)
+donfg1.d <- lm(log(I(DON_per_Fg+1)) ~ hostVar*microTrt ,
+             data=disease4)
+
+# model with potID and block best model 
+anova(donfg1.a, donfg1.b, donfg1.c, donfg1.d) 
+
+donfg1.a <- update(donfg1.a, method = "REML")
+donfg1.b <- update(donfg1.b, method = "REML")
+anova(donfg1.a, donfg1.b)  # still shows that block/potID best
+
+# best model, fit with REML
+#summary(donfg1.a)
+summary(donfg1.a)$tTable
+summary(donfg1.a)$sigma
+
+```
+
+```{r}
+# fit same model with ML, to do LR ratio tests for pvalues
+donfg2 <- nlme::lme(log(I(DON_per_Fg+1)) ~ hostVar*microTrt, 
+            random = ~ 1|block/potID, data=disease4, method = "ML")
+donfg2.a <- update(donfg2, .~. -hostVar:microTrt)
+anova(donfg2, donfg2.a)
+
+donfg2.b <- update(donfg2.a, .~. -microTrt)
+donfg2.c <- update(donfg2.a, .~. -hostVar)
+anova(donfg2.a, donfg2.b)
+
+anova(donfg2.a, donfg2.c)
+
+```
+
+```{r, include = FALSE, fig.keep = 'none'}
+plot(residuals(donfg1.a) ~ fitted(donfg1.a))
+plot(residuals(donfg1.a) ~ donfg1.a$data$block)
+plot(residuals(donfg1.a) ~ donfg1.a$data$microTrt)
+plot(residuals(donfg1.a) ~ donfg1.a$data$hostVar)     #Alsen residuals > Norm ones, makes sense with failed rxns
+    points(residuals(donfg1.a) ~ donfg1.a$data$hostVar)
+plot(residuals(donfg1.a) ~ donfg1.a$data$hostMicroBlock)
+```
+* Few outliers in Alsen, likely the failed rxns
+
+
+```{r}
+# Notes for MS
+mean(phys4$Phi2)/mean(phys4$PhiNO)
+mean(phys4$Phi2)/mean(phys4$PhiNPQ)
+
+tapply(disease3$ugDON_per_g, list(disease3$microTrt, disease3$hostVar) , mean)
+
+```
+
+
+
+
+# Does Host Variety x Bacteria predict Physiology?
+
+### Leaf Thickness
+
+```{r}
+lfth.1a <- nlme::lme(log(leaf_thickness) ~ hostVar*bacteria, 
+        random = ~ 1|block/potID, data=phys4, method = "ML")
+lfth.1b <- nlme::lme(log(leaf_thickness) ~ hostVar*bacteria, 
+        random = ~ 1|block, data=phys4, method = "ML")
+lfth.1c <- lm(log(leaf_thickness) ~ hostVar*microTrt +
+             block, data=phys4)
+lfth.1d <- lm(log(leaf_thickness) ~ hostVar*microTrt ,
+             data=phys4)
+
+# model with just block best model 
+anova(lfth.1a, lfth.1b, lfth.1c, lfth.1d) 
+
+lfth.1a <- update(lfth.1a, method = "REML")
+lfth.1b <- update(lfth.1b, method = "REML")
+anova(lfth.1a, lfth.1b)  # but shows that block/potID best
+
+# best model, fit with REML
+#summary(lfth.1a)
+summary(lfth.1a)$tTable
+summary(lfth.1a)$sigma
+
+```
+
+```{r}
+lfth.2 <- nlme::lme(log(leaf_thickness) ~ hostVar*bacteria, 
+        random = ~ 1|block/potID, data=phys4, method = "ML")
+lfth.2a <- update(lfth.2, .~. -hostVar:bacteria)
+anova(lfth.2, lfth.2a)
+
+lfth.2b <- update(lfth.2a, .~. -bacteria)
+lfth.2c <- update(lfth.2a, .~. -hostVar)
+anova(lfth.2a, lfth.2b)
+
+anova(lfth.2a, lfth.2c)
+
+MuMIn::r.squaredGLMM(lfth.2, method = 'delta')
+
+```
+
+```{r, include = FALSE, fig.keep = 'none'}
+plot(residuals(lfth.1a) ~ fitted(lfth.1a))
+plot(residuals(lfth.1a) ~ lfth.1a$data$block)
+plot(residuals(lfth.1a) ~ lfth.1a$data$bacteria)
+plot(residuals(lfth.1a) ~ lfth.1a$data$hostVar)
+    points(residuals(lfth.1a) ~ lfth.1a$data$hostVar)
+```
+* Resids fine
+
+### SPAD
+```{r}
+spad.1a <- nlme::lme(SPAD ~ hostVar*bacteria, 
+        random = ~ 1|block/potID, data=phys4, method = "ML")
+spad.1b <- nlme::lme(SPAD ~ hostVar*bacteria, 
+        random = ~ 1|block, data=phys4, method = "ML")
+spad.1c <- lm(SPAD ~ hostVar*microTrt +
+             block, data=phys4)
+spad.1d <- lm(SPAD ~ hostVar*microTrt ,
+             data=phys4)
+
+# model with just block best model 
+anova(spad.1a, spad.1b, spad.1c, spad.1d) 
+
+spad.1a <- update(spad.1a, method = "REML")
+spad.1b <- update(spad.1b, method = "REML")
+anova(spad.1a, spad.1b)  # but shows that block/potID best
+
+# best model, fit with REML
+#summary(spad.1a)
+summary(spad.1a)$tTable
+summary(spad.1a)$sigma
+```
+
+```{r}
+spad.2 <- nlme::lme(SPAD ~ hostVar*bacteria, 
+        random = ~ 1|block/potID, data=phys4, method = "ML")
+spad.2a <- update(spad.2, .~. -hostVar:bacteria)
+anova(spad.2, spad.2a)
+
+spad.2b <- update(spad.2a, .~. -bacteria)
+spad.2c <- update(spad.2a, .~. -hostVar)
+anova(spad.2a, spad.2b)
+
+anova(spad.2a, spad.2c)
+
+MuMIn::r.squaredGLMM(spad.2, method = 'delta')
+
+```
+
+```{r, include = FALSE, fig.keep = 'none'}
+plot(residuals(spad.1a) ~ fitted(spad.1a))
+plot(residuals(spad.1a) ~ spad.1a$data$block)
+plot(residuals(spad.1a) ~ spad.1a$data$bacteria)
+plot(residuals(spad.1a) ~ spad.1a$data$hostVar)
+    points(residuals(spad.1a) ~ spad.1a$data$hostVar)
+```
+* Resids fine
+
+```{r}
+tapply(phys4$SPAD, phys4$hostVar, myMEAN)
+tapply(phys4$SPAD, phys4$bacteria, myMEAN)
+```
+
+
+### Phi2
+```{r}
+phitwo.1a <- nlme::lme(Phi2 ~ hostVar*bacteria + 
+                Ambient.Temperature + Light.Intensity..PAR. + lVPD, 
+                random = ~ 1|block/potID, data=phys4, method = "ML")
+phitwo.1b <- nlme::lme(Phi2 ~ hostVar*bacteria + 
+                Ambient.Temperature + Light.Intensity..PAR. + lVPD, 
+                random = ~ 1|block, data=phys4, method = "ML")
+phitwo.1c <- lm(Phi2 ~ hostVar*bacteria + 
+                Ambient.Temperature + Light.Intensity..PAR. + lVPD + 
+                block,    data=phys4)
+phitwo.1d <- lm(Phi2 ~ hostVar*bacteria + 
+                Ambient.Temperature + Light.Intensity..PAR. + lVPD,
+                data=phys4)
+
+# if ML fit method used, then model with without block at all is the best model, but note that L-ratio very low for ranef model comparisons
+anova(phitwo.1a, phitwo.1b, phitwo.1c, phitwo.1d)  
+
+
+phitwo.1a <- update(phitwo.1a, method = "REML")
+phitwo.1b <- update(phitwo.1b, method = "REML")
+anova(phitwo.1a, phitwo.1b)
+# if you divide the pval/2, shows good support for the more complex model (p~0.05)
+
+# best model, fit with REML
+#summary(phitwo.1a)
+summary(phitwo.1a)$tTable
+summary(phitwo.1a)$sigma
+
+```
+
+```{r}
+phitwo.2 <- update(phitwo.1a, method = "ML")
+phitwo.2a <- update(phitwo.2, .~. - Ambient.Temperature)
+phitwo.2b <- update(phitwo.2, .~. - Light.Intensity..PAR.)
+phitwo.2c <- update(phitwo.2, .~. - lVPD)
+
+sapply(list(phitwo.2, phitwo.2a, phitwo.2b, phitwo.2c), BIC)
+#model where lVPD is removed = BIC >5 from full model
+
+phitwo.3a <- update(phitwo.2c, .~. - Ambient.Temperature)
+phitwo.3b <- update(phitwo.2c, .~. - Light.Intensity..PAR.)
+
+sapply(list(phitwo.2c, phitwo.3a, phitwo.3b), BIC)
+# no model with BIC >2 from full model
+# keep both Temp + PAR
+
+#summary(phitwo.2c)
+summary(phitwo.2c)$tTable
+summary(phitwo.2c)$sigma
+```
+
+```{r}
+phitwo.4 <- phitwo.2c
+
+phitwo.4a <- update(phitwo.4, .~. -hostVar:bacteria)
+anova(phitwo.4, phitwo.4a)
+
+phitwo.4b <- update(phitwo.4a, .~. -bacteria)
+phitwo.4c <- update(phitwo.4a, .~. -hostVar)
+phitwo.4d <- update(phitwo.4a, .~. -Ambient.Temperature)
+phitwo.4e <- update(phitwo.4a, .~. -Light.Intensity..PAR.)
+anova(phitwo.4a, phitwo.4b)
+
+anova(phitwo.4a, phitwo.4c)
+
+anova(phitwo.4a, phitwo.4d)
+
+anova(phitwo.4a, phitwo.4e)
+
+Anova(phitwo.4, type = 2)
+
+MuMIn::r.squaredGLMM(phitwo.4, method = 'delta')
+
+```
+
+```{r, include = FALSE, fig.keep = 'none'}
+phitwo.4REML <- update(phitwo.4, method = "REML")
+plot(residuals(phitwo.4REML) ~ fitted(phitwo.4REML))
+plot(residuals(phitwo.4REML) ~ phitwo.4REML$data$block)
+plot(residuals(phitwo.4REML) ~ phitwo.4REML$data$bacteria)
+plot(residuals(phitwo.4REML) ~ phitwo.4REML$data$hostVar)
+    points(residuals(phitwo.4REML) ~ phitwo.4REML$data$hostVar)
+```
+* Resids fine, one outlier in fitted~resids
+
+### PhiNO
+```{r}
+phino.1a <- nlme::lme(PhiNO ~ hostVar*bacteria + 
+                Ambient.Temperature + Light.Intensity..PAR. + lVPD, 
+                random = ~ 1|block/potID, data=phys4, method = "ML")
+phino.1b <- nlme::lme(PhiNO ~ hostVar*bacteria + 
+                Ambient.Temperature + Light.Intensity..PAR. + lVPD, 
+                random = ~ 1|block, data=phys4, method = "ML")
+phino.1c <- lm(PhiNO ~ hostVar*bacteria + 
+                Ambient.Temperature + Light.Intensity..PAR. + lVPD + 
+                block,    data=phys4)
+phino.1d <- lm(PhiNO ~ hostVar*bacteria + 
+                Ambient.Temperature + Light.Intensity..PAR. + lVPD,
+                data=phys4)
+
+# if ML fit method used, then LRT says 1|block is best model, 
+anova(phino.1a, phino.1b, phino.1c, phino.1d)  
+
+
+phino.1a <- update(phino.1a, method = "REML")
+phino.1b <- update(phino.1b, method = "REML")
+anova(phino.1a, phino.1b)
+# this says that the more complex ranef model is better
+
+# best model, fit with REML
+#summary(phino.1a)
+summary(phino.1a)$tTable
+summary(phino.1a)$sigma
+
+```
+
+```{r}
+phino.2 <- update(phino.1a, method = "ML")
+phino.2a <- update(phino.2, .~. - Ambient.Temperature)
+phino.2b <- update(phino.2, .~. - Light.Intensity..PAR.)
+phino.2c <- update(phino.2, .~. - lVPD)
+
+sapply(list(phino.2, phino.2a, phino.2b, phino.2c), BIC)
+#model where lVPD is removed = BIC >4.8 from full model
+
+phino.3a <- update(phino.2c, .~. - Ambient.Temperature)
+phino.3b <- update(phino.2c, .~. - Light.Intensity..PAR.)
+
+sapply(list(phino.2c, phino.3a, phino.3b), BIC)
+# model where PAR is removed = BIC >4 from -lVPD model
+
+phino.4a <- update(phino.3b, .~. - Ambient.Temperature)
+sapply(list(phino.3b, phino.4a), BIC)
+# keep Temp 
+
+#summary(phino.3b)
+summary(phino.3b)$tTable
+summary(phino.3b)$sigma
+```
+
+```{r}
+phino.4 <- phino.3b
+
+phino.4a <- update(phino.4, .~. -hostVar:bacteria)
+anova(phino.4, phino.4a)
+
+phino.4b <- update(phino.4a, .~. -bacteria)
+phino.4c <- update(phino.4a, .~. -hostVar)
+phino.4d <- update(phino.4a, .~. -Ambient.Temperature)
+anova(phino.4a, phino.4b)
+
+anova(phino.4a, phino.4c)
+
+anova(phino.4a, phino.4d)
+
+Anova(phino.4, type = 2)
+
+MuMIn::r.squaredGLMM(phino.4, method = 'delta')
+
+```
+
+```{r, include = FALSE, fig.keep = 'none'}
+phino.4REML <- update(phino.4, method = "REML")
+plot(residuals(phino.4REML) ~ fitted(phino.4REML))
+plot(residuals(phino.4REML) ~ phino.4REML$data$block)
+plot(residuals(phino.4REML) ~ phino.4REML$data$bacteria)
+plot(residuals(phino.4REML) ~ phino.4REML$data$hostVar)
+    points(residuals(phino.4REML) ~ phino.4REML$data$hostVar)
+```
+* resids fine
+
+
+### PhiNPQ
+```{r}
+phinpq.1a <- nlme::lme(PhiNPQ ~ hostVar*bacteria + 
+                Ambient.Temperature + Light.Intensity..PAR. + lVPD, 
+                random = ~ 1|block/potID, data=phys4, method = "ML")
+phinpq.1b <- nlme::lme(PhiNPQ ~ hostVar*bacteria + 
+                Ambient.Temperature + Light.Intensity..PAR. + lVPD, 
+                random = ~ 1|block, data=phys4, method = "ML")
+phinpq.1c <- lm(PhiNPQ ~ hostVar*bacteria + 
+                Ambient.Temperature + Light.Intensity..PAR. + lVPD + 
+                block,    data=phys4)
+phinpq.1d <- lm(PhiNPQ ~ hostVar*bacteria + 
+                Ambient.Temperature + Light.Intensity..PAR. + lVPD,
+                data=phys4)
+
+# if ML fit method used, then LRT says 1|block is best model, 
+anova(phinpq.1a, phinpq.1b, phinpq.1c, phinpq.1d)  
+
+phinpq.1a <- update(phinpq.1a, method = "REML")
+phinpq.1b <- update(phinpq.1b, method = "REML")
+anova(phinpq.1a, phinpq.1b)
+# this says that the more complex ranef model is better
+
+# best model, fit with REML
+#summary(phinpq.1a)
+summary(phinpq.1a)$tTable
+summary(phinpq.1a)$sigma
+
+```
+
+```{r}
+phinpq.2 <- update(phinpq.1a, method = "ML")
+phinpq.2a <- update(phinpq.2, .~. - Ambient.Temperature)
+phinpq.2b <- update(phinpq.2, .~. - Light.Intensity..PAR.)
+phinpq.2c <- update(phinpq.2, .~. - lVPD)
+
+sapply(list(phinpq.2, phinpq.2a, phinpq.2b, phinpq.2c), BIC)
+#all models better than full model, where lVPD is removed = best = BIC >5.0
+
+phinpq.3a <- update(phinpq.2c, .~. - Ambient.Temperature)
+phinpq.3b <- update(phinpq.2c, .~. - Light.Intensity..PAR.)
+
+sapply(list(phinpq.2c, phinpq.3a, phinpq.3b), BIC)
+# both removals better, where Temp removed marginally better = BIC >3.7 from -lVPD model
+
+phinpq.4a <- update(phinpq.3a, .~. - Light.Intensity..PAR.)
+sapply(list(phinpq.3a, phinpq.4a), BIC)
+# remove all covars
+
+#summary(phinpq.4a)
+summary(phinpq.4a)$tTable
+summary(phinpq.4a)$sigma
+
+```
+
+```{r}
+phinpq.4 <- phinpq.4a
+
+phinpq.4a <- update(phinpq.4, .~. -hostVar:bacteria)
+anova(phinpq.4, phinpq.4a)
+
+phinpq.4b <- update(phinpq.4a, .~. -bacteria)
+phinpq.4c <- update(phinpq.4a, .~. -hostVar)
+anova(phinpq.4a, phinpq.4b)
+
+anova(phinpq.4a, phinpq.4c)
+
+Anova(phinpq.4, type = 2)
+
+MuMIn::r.squaredGLMM(phinpq.4, method = 'delta')
+
+```
+
+```{r, include = FALSE, fig.keep = 'none'}
+phinpq.4REML <- update(phinpq.4, method = "REML")
+plot(residuals(phinpq.4REML) ~ fitted(phinpq.4REML))
+plot(residuals(phinpq.4REML) ~ phinpq.4REML$data$block)
+plot(residuals(phinpq.4REML) ~ phinpq.4REML$data$bacteria)
+plot(residuals(phinpq.4REML) ~ phinpq.4REML$data$hostVar)
+    points(residuals(phinpq.4REML) ~ phinpq.4REML$data$hostVar)
+```
+* Resids fine
+
+
+#### PhiNPQ vs. NPQt
+```{r}
+cor(phys4$PhiNPQ, phys4$NPQt) #98.8% correlated in the greenhouse
+```
+
+### vH+
+```{r}
+vh.1a <- nlme::lme(vH. ~ hostVar*bacteria + 
+                Ambient.Temperature + Light.Intensity..PAR. + lVPD, 
+                random = ~ 1|block/potID, data=phys4, method = "ML")
+vh.1b <- nlme::lme(vH. ~ hostVar*bacteria + 
+                Ambient.Temperature + Light.Intensity..PAR. + lVPD, 
+                random = ~ 1|block, data=phys4, method = "ML")
+vh.1c <- lm(vH. ~ hostVar*bacteria + 
+                Ambient.Temperature + Light.Intensity..PAR. + lVPD + 
+                block,    data=phys4)
+vh.1d <- lm(vH. ~ hostVar*bacteria + 
+                Ambient.Temperature + Light.Intensity..PAR. + lVPD,
+                data=phys4)
+
+# if ML fit method used, then LRT says 1|block is best model
+anova(vh.1a, vh.1b, vh.1c, vh.1d)  #
+
+vh.1a <- update(vh.1a, method = "REML")
+vh.1b <- update(vh.1b, method = "REML")
+anova(vh.1a, vh.1b)
+# this says that the SIMPLER ranef model is better
+
+# 2nd best model, fit with REML
+#summary(vh.1a)
+summary(vh.1a)$tTable
+summary(vh.1a)$sigma
+
+```
+
+```{r}
+vh.2 <- update(vh.1a, method = "ML")
+vh.2a <- update(vh.2, .~. - Ambient.Temperature)
+vh.2b <- update(vh.2, .~. - Light.Intensity..PAR.)
+vh.2c <- update(vh.2, .~. - lVPD)
+
+sapply(list(vh.2, vh.2a, vh.2b, vh.2c), BIC)
+#model where Temp removed = best = BIC >4.1
+
+vh.3a <- update(vh.2a, .~. - Light.Intensity..PAR.)
+vh.3b <- update(vh.2a, .~. - lVPD)
+
+sapply(list(vh.2a, vh.3a, vh.3b), BIC)
+# keep lVPD and PAR
+
+
+#summary(vh.2a)
+summary(vh.2a)$tTable
+summary(vh.2a)$sigma
+
+```
+
+```{r}
+vh.4 <- vh.2a
+
+vh.4a <- update(vh.4, .~. -hostVar:bacteria)
+anova(vh.4, vh.4a)
+
+vh.4b <- update(vh.4a, .~. -bacteria)
+vh.4c <- update(vh.4a, .~. -hostVar)
+vh.4d <- update(vh.4a, .~. -Light.Intensity..PAR.)
+vh.4e <- update(vh.4a, .~. -lVPD)
+anova(vh.4a, vh.4b)
+
+anova(vh.4a, vh.4c)
+
+anova(vh.4a, vh.4d)
+
+anova(vh.4a, vh.4e)
+
+Anova(vh.4, type = 2)
+
+MuMIn::r.squaredGLMM(vh.4, method = 'delta')
+
+```
+
+```{r, include = FALSE, fig.keep = 'none'}
+vh.4REML <- update(vh.4, method = "REML")
+plot(residuals(vh.4REML) ~ fitted(vh.4REML))
+plot(residuals(vh.4REML) ~ vh.4REML$data$block)
+plot(residuals(vh.4REML) ~ vh.4REML$data$bacteria)
+plot(residuals(vh.4REML) ~ vh.4REML$data$hostVar)
+    points(residuals(vh.4REML) ~ vh.4REML$data$hostVar)
+```
+* Resids fine
+
+
+### gH+
+```{r}
+gh.1a <- nlme::lme(gH. ~ hostVar*bacteria + 
+                Ambient.Temperature + Light.Intensity..PAR. + lVPD, 
+                random = ~ 1|block/potID, data=phys4, method = "ML")
+gh.1b <- nlme::lme(gH. ~ hostVar*bacteria + 
+                Ambient.Temperature + Light.Intensity..PAR. + lVPD, 
+                random = ~ 1|block, data=phys4, method = "ML")
+gh.1c <- lm(gH. ~ hostVar*bacteria + 
+                Ambient.Temperature + Light.Intensity..PAR. + lVPD + 
+                block,    data=phys4)
+gh.1d <- lm(gH. ~ hostVar*bacteria + 
+                Ambient.Temperature + Light.Intensity..PAR. + lVPD,
+                data=phys4)
+
+# if ML fit method used, then LRT says no block is best model (but note low L-ratio value)
+anova(gh.1a, gh.1b, gh.1c, gh.1d)  #LR test agree with AIC, & BIC
+
+
+gh.1a <- update(gh.1a, method = "REML")
+gh.1b <- update(gh.1b, method = "REML")
+anova(gh.1a, gh.1b)
+# this says that the SIMPLER ranef model is better
+
+
+# 2nd best model, fit with REML
+#summary(gh.1a)
+summary(gh.1a)$tTable
+summary(gh.1a)$sigma
+
+```
+
+```{r}
+gh.2 <- update(gh.1a, method = "ML")
+gh.2a <- update(gh.2, .~. - Ambient.Temperature)
+gh.2b <- update(gh.2, .~. - Light.Intensity..PAR.)
+gh.2c <- update(gh.2, .~. - lVPD)
+
+sapply(list(gh.2, gh.2a, gh.2b, gh.2c), BIC)
+#model where Temp removed = barely best (close with PAR) = BIC >5.0
+
+gh.3a <- update(gh.2a, .~. - Light.Intensity..PAR.)
+gh.3b <- update(gh.2a, .~. - lVPD)
+
+sapply(list(gh.2a, gh.3a, gh.3b), BIC)
+# model wtihout PAR better, BIC ~ 5
+
+gh.4a <- update(gh.3a, .~. - lVPD)
+sapply(list(gh.3a, gh.4a), BIC)
+# keep lVPD
+
+#summary(gh.3a)
+summary(gh.3a)$tTable
+summary(gh.3a)$sigma
+
+```
+
+```{r}
+gh.4 <- gh.3a
+
+gh.4a <- update(gh.4, .~. -hostVar:bacteria)
+anova(gh.4, gh.4a)
+
+gh.4b <- update(gh.4a, .~. -bacteria)
+gh.4c <- update(gh.4a, .~. -hostVar)
+gh.4d <- update(gh.4a, .~. -lVPD)
+anova(gh.4a, gh.4b)
+
+anova(gh.4a, gh.4c)
+
+anova(gh.4a, gh.4d)
+
+Anova(gh.4, type = 2)
+
+MuMIn::r.squaredGLMM(gh.4, method = 'delta')
+
+```
+
+```{r, include = FALSE, fig.keep = 'none'}
+gh.4REML <- update(gh.4, method = "REML")
+plot(residuals(gh.4REML) ~ fitted(gh.4REML))
+plot(residuals(gh.4REML) ~ gh.4REML$data$block)
+plot(residuals(gh.4REML) ~ gh.4REML$data$bacteria)
+plot(residuals(gh.4REML) ~ gh.4REML$data$hostVar)
+    points(residuals(gh.4REML) ~ gh.4REML$data$hostVar)
+```
+* Resids fine
+
+
+### ECSt
+```{r}
+ecs.1a <- nlme::lme(ECSt.mAU ~ hostVar*bacteria + 
+                Ambient.Temperature + Light.Intensity..PAR. + lVPD, 
+                random = ~ 1|block/potID, data=phys4, method = "ML")
+ecs.1b <- nlme::lme(ECSt.mAU ~ hostVar*bacteria + 
+                Ambient.Temperature + Light.Intensity..PAR. + lVPD, 
+                random = ~ 1|block, data=phys4, method = "ML")
+ecs.1c <- lm(ECSt.mAU ~ hostVar*bacteria + 
+                Ambient.Temperature + Light.Intensity..PAR. + lVPD + 
+                block,    data=phys4)
+ecs.1d <- lm(ECSt.mAU ~ hostVar*bacteria + 
+                Ambient.Temperature + Light.Intensity..PAR. + lVPD,
+                data=phys4)
+
+# if ML fit method used, then LRT says 1|block is best model
+anova(ecs.1a, ecs.1b, ecs.1c, ecs.1d) 
+
+
+ecs.1a <- update(ecs.1a, method = "REML")
+ecs.1b <- update(ecs.1b, method = "REML")
+anova(ecs.1a, ecs.1b)
+# this says that the SIMPLER ranef model is better
+
+
+# fit with REML
+#summary(ecs.1a)
+summary(ecs.1a)$tTable
+summary(ecs.1a)$sigma
+
+```
+
+```{r}
+ecs.2 <- update(ecs.1a, method = "ML")
+ecs.2a <- update(ecs.2, .~. - Ambient.Temperature)
+ecs.2b <- update(ecs.2, .~. - Light.Intensity..PAR.)
+ecs.2c <- update(ecs.2, .~. - lVPD)
+
+sapply(list(ecs.2, ecs.2a, ecs.2b, ecs.2c), BIC)
+#model where lVPD removed, = BIC >5 from full model
+
+ecs.3a <- update(ecs.2c, .~. - Ambient.Temperature)
+ecs.3b <- update(ecs.2c, .~. - Light.Intensity..PAR.)
+
+sapply(list(ecs.2c, ecs.3a, ecs.3b), BIC)
+# model wtihout Temp better, BIC ~ 4
+
+ecs.4a <- update(ecs.3a, .~. - Light.Intensity..PAR.)
+sapply(list(ecs.3a, ecs.4a), BIC)
+# keep Light.Intensity..PAR.
+
+#summary(ecs.3a)
+summary(ecs.3a)$tTable
+summary(ecs.3a)$sigma
+
+```
+
+```{r}
+ecs.4 <- ecs.3a
+
+ecs.4a <- update(ecs.4, .~. -hostVar:bacteria)
+anova(ecs.4, ecs.4a)
+
+ecs.4b <- update(ecs.4a, .~. -bacteria)
+ecs.4c <- update(ecs.4a, .~. -hostVar)
+ecs.4d <- update(ecs.4a, .~. -Light.Intensity..PAR.)
+anova(ecs.4a, ecs.4b)
+
+anova(ecs.4a, ecs.4c)
+
+anova(ecs.4a, ecs.4d)
+
+Anova(ecs.4, type = 2)
+
+MuMIn::r.squaredGLMM(ecs.4, method = 'delta')
+
+```
+
+```{r, include = FALSE, fig.keep = 'none'}
+ecs.4REML <- update(ecs.4, method = "REML")
+plot(residuals(ecs.4REML) ~ fitted(ecs.4REML))
+plot(residuals(ecs.4REML) ~ ecs.4REML$data$block)
+plot(residuals(ecs.4REML) ~ ecs.4REML$data$bacteria)
+plot(residuals(ecs.4REML) ~ ecs.4REML$data$hostVar)
+    points(residuals(ecs.4REML) ~ ecs.4REML$data$hostVar)
+```
+* Resids fine
+
+
+### Check Correlations
+```{r}
+cor.dat <- phys4[,c('Phi2', 'PhiNO', 'PhiNPQ', 
+                    'vH.', 'gH.', 'ECSt.mAU',
+                    'leaf_thickness', 'SPAD')]
+cor(cor.dat)
+# highest is Phi2 to PhiNPQ, r = -0.6323, r2 = 0.3997
+```
+
+
+
+## MANOVA - Phi variables
+
+* will not recheck random effects after determing they are important for at least some of the component response variables.
+```{r}
+phi.1a <- nlme::lme(cbind(Phi2, PhiNO, PhiNPQ) ~ hostVar*bacteria + 
+                Ambient.Temperature + Light.Intensity..PAR. + lVPD, 
+                random = ~ 1|block/potID, data=phys4, method = "REML")
+# fit with REML
+#summary(phi.1a)
+summary(phi.1a)$tTable
+summary(phi.1a)$sigma
+```
+
+```{r}
+phi.2 <- update(phi.1a, method = "ML")
+phi.2a <- update(phi.2, .~. - Ambient.Temperature)
+phi.2b <- update(phi.2, .~. - Light.Intensity..PAR.)
+phi.2c <- update(phi.2, .~. - lVPD)
+
+sapply(list(phi.2, phi.2a, phi.2b, phi.2c), BIC)
+#model where lVPD removed, = BIC >5 from full model
+
+phi.3a <- update(phi.2c, .~. - Ambient.Temperature)
+phi.3b <- update(phi.2c, .~. - Light.Intensity..PAR.)
+
+sapply(list(phi.2c, phi.3a, phi.3b), BIC)
+# no BIC change >2, so keep both Temp and PAR
+
+#summary(phi.2c)
+summary(phi.2c)$tTable
+summary(phi.2c)$sigma
+
+```
+
+```{r}
+phi.4 <- phi.2c
+
+phi.4a <- update(phi.4, .~. -hostVar:bacteria)
+anova(phi.4, phi.4a)
+
+phi.4b <- update(phi.4a, .~. -bacteria)
+phi.4c <- update(phi.4a, .~. -hostVar)
+phi.4d <- update(phi.4a, .~. -Ambient.Temperature)
+phi.4e <- update(phi.4a, .~. -Light.Intensity..PAR.)
+anova(phi.4a, phi.4b)
+
+anova(phi.4a, phi.4c)
+
+anova(phi.4a, phi.4d)
+
+anova(phi.4a, phi.4e)
+
+Anova(phi.4, type = 2)
+
+MuMIn::r.squaredGLMM(phi.4, method = 'delta')
+
+```
+
+```{r, include = FALSE, fig.keep = 'none'}
+phi.4REML <- update(phi.4, method = "REML")
+plot(residuals(phi.4REML) ~ fitted(phi.4REML))
+plot(residuals(phi.4REML) ~ phi.4REML$data$block)
+plot(residuals(phi.4REML) ~ phi.4REML$data$bacteria)
+plot(residuals(phi.4REML) ~ phi.4REML$data$hostVar)
+    points(residuals(phi.4REML) ~ phi.4REML$data$hostVar)
+```
+* Resids fine
+
+
+
+## MANOVA - Proton variables
+```{r}
+prot.1a <- nlme::lme(cbind(vH., gH., ECSt.mAU) ~ hostVar*bacteria + 
+                Ambient.Temperature + Light.Intensity..PAR. + lVPD, 
+                random = ~ 1|block/potID, data=phys4, method = "REML")
+# fit with REML
+#summary(prot.1a)
+summary(prot.1a)$tTable
+summary(prot.1a)$sigma
+```
+
+```{r}
+prot.2 <- update(prot.1a, method = "ML")
+prot.2a <- update(prot.2, .~. - Ambient.Temperature)
+prot.2b <- update(prot.2, .~. - Light.Intensity..PAR.)
+prot.2c <- update(prot.2, .~. - lVPD)
+
+sapply(list(prot.2, prot.2a, prot.2b, prot.2c), BIC)
+#model where Temp removed, = BIC ~4 from full model
+
+prot.3a <- update(prot.2a, .~. - Light.Intensity..PAR.)
+prot.3b <- update(prot.2a, .~. - lVPD)
+
+sapply(list(prot.2a, prot.3a, prot.3b), BIC)
+# no BIC change >2, so keep both PAR and lVPD
+
+#summary(prot.2a)
+summary(prot.2a)$tTable
+summary(prot.2a)$sigma
+
+```
+
+```{r}
+prot.4 <- prot.2a
+
+prot.4a <- update(prot.4, .~. -hostVar:bacteria)
+anova(prot.4, prot.4a)
+
+prot.4b <- update(prot.4a, .~. -bacteria)
+prot.4c <- update(prot.4a, .~. -hostVar)
+prot.4d <- update(prot.4a, .~. -Light.Intensity..PAR.)
+prot.4e <- update(prot.4a, .~. -lVPD)
+anova(prot.4a, prot.4b)
+
+anova(prot.4a, prot.4c)
+
+anova(prot.4a, prot.4d)
+
+anova(prot.4a, prot.4e)
+
+Anova(prot.4, type = 2)
+
+MuMIn::r.squaredGLMM(prot.4, method = 'delta')
+
+```
+
+```{r, include = FALSE, fig.keep = 'none'}
+prot.4REML <- update(prot.4, method = "REML")
+plot(residuals(prot.4REML) ~ fitted(prot.4REML))
+plot(residuals(prot.4REML) ~ prot.4REML$data$block)
+plot(residuals(prot.4REML) ~ prot.4REML$data$bacteria)
+plot(residuals(prot.4REML) ~ prot.4REML$data$hostVar)
+    points(residuals(prot.4REML) ~ prot.4REML$data$hostVar)
+```
+* Resids fine
+
+
+
+# Figures
+
+### Phys
+```{r, echo = FALSE, results = 'hide'}
+pd <- position_dodge(0.25) 
+phi2.p <- ggplot(phys.trt, 
+        aes(y = Phi2means, x = hostVar, group = bacteria, colour = bacteria)) +
+    geom_errorbar(aes(ymin=Phi2means-Phi2se, ymax=Phi2means+Phi2se), width=.4, position=pd) +
+    geom_line(position=pd) +
+    geom_point(position=pd, size =2) +
+    scale_x_discrete("Host Variety") +
+    scale_color_manual("", values = micro_color_neg) +
+    scale_y_continuous("Phi2")
+#tiff("./figures/Phi2-means.tiff", width = 10/2.54, height = 10/2.54, units="in", res=600)
+phi2.p
+#dev.off()
+
+phino.p <- ggplot(phys.trt, 
+        aes(y = PhiNOmeans, x = hostVar, group = bacteria, colour = bacteria)) +
+    geom_errorbar(aes(ymin=PhiNOmeans-PhiNOse, ymax=PhiNOmeans+PhiNOse), width=.4, position=pd) +
+    geom_line(position=pd) +
+    geom_point(position=pd, size =2) +
+    scale_x_discrete("Host Variety") +
+    scale_color_manual("", values = micro_color_neg) +
+    scale_y_continuous("PhiNO")
+#tiff("./figures/PhiNO-means.tiff", width = 10/2.54, height = 10/2.54, units="in", res=600)
+phino.p
+#dev.off()
+
+phinpq.p <- ggplot(phys.trt, 
+        aes(y = PhiNPQmeans, x = hostVar, group = bacteria, colour = bacteria)) +
+    geom_errorbar(aes(ymin=PhiNPQmeans-PhiNPQse, ymax=PhiNPQmeans+PhiNPQse), width=.4, position=pd) +
+    geom_line(position=pd) +
+    geom_point(position=pd, size =2) +
+    scale_x_discrete("Host Variety") +
+    scale_color_manual("", values = micro_color_neg) +
+    scale_y_continuous("PhiNPQ")
+#tiff("./figures/PhiNPQ-means.tiff", width = 10/2.54, height = 10/2.54, units="in", res=600)
+phinpq.p
+#dev.off()
+
+ecs.p <- ggplot(phys.trt, 
+        aes(y = ECStmeans, x = hostVar, group = bacteria, colour = bacteria)) +
+    geom_errorbar(aes(ymin=ECStmeans-ECStse, ymax=ECStmeans+ECStse), width=.4, position=pd) +
+    geom_line(position=pd) +
+    geom_point(position=pd, size =2) +
+    scale_x_discrete("Host Variety") +
+    scale_color_manual("", values = micro_color_neg) +
+    scale_y_continuous("ECSt")
+#tiff("./figures/ECSt-means.tiff", width = 10/2.54, height = 10/2.54, units="in", res=600)
+ecs.p
+#dev.off()
+
+vh.p <- ggplot(phys.trt, 
+        aes(y = vH.means, x = hostVar, group = bacteria, colour = bacteria)) +
+    geom_errorbar(aes(ymin=vH.means-vH.se, ymax=vH.means+vH.se), width=.4, position=pd) +
+    geom_line(position=pd) +
+    geom_point(position=pd, size =2) +
+    scale_x_discrete("Host Variety") +
+    scale_color_manual("", values = micro_color_neg) +
+    scale_y_continuous("vH+")
+#tiff("./figures/vH-means.tiff", width = 10/2.54, height = 10/2.54, units="in", res=600)
+vh.p
+#dev.off()
+
+gh.p <- ggplot(phys.trt, 
+        aes(y = gH.means, x = hostVar, group = bacteria, colour = bacteria)) +
+    geom_errorbar(aes(ymin=gH.means-gH.se, ymax=gH.means+gH.se), width=.4, position=pd) +
+    geom_line(position=pd) +
+    geom_point(position=pd, size =2) +
+    scale_x_discrete("Host Variety") +
+    scale_color_manual("", values = micro_color_neg) +
+    scale_y_continuous("gH+")
+#tiff("./figures/gH-means.tiff", width = 10/2.54, height = 10/2.54, units="in", res=600)
+gh.p
+#dev.off()
+
+```
+
+### Morph
+```{r, echo = FALSE, results = 'hide'}
+pd <- position_dodge(0.25) 
+lfth.p <- ggplot(phys.trt, 
+        aes(y = leaf_thicknessmeans, x = hostVar, group = bacteria, colour = bacteria)) +
+    geom_errorbar(aes(ymin=leaf_thicknessmeans-leaf_thicknessse,
+                      ymax=leaf_thicknessmeans+leaf_thicknessse), width=.4, position=pd) +
+    geom_line(position=pd) +
+    geom_point(position=pd, size =2) +
+    scale_x_discrete("Host Variety") +
+    scale_color_manual("", values = micro_color_neg) +
+    scale_y_continuous(expression(paste("Leaf Thickness ",mu,"M")), trans = 'log')
+#tiff("./figures/leaf_thickness-means.tiff", width = 10/2.54, height = 10/2.54, units="in", res=600)
+lfth.p
+#dev.off()
+
+spad.p <- ggplot(phys.trt, 
+        aes(y = SPADmeans, x = hostVar, group = bacteria, colour = bacteria)) +
+    geom_errorbar(aes(ymin=SPADmeans-SPADse,
+                      ymax=SPADmeans+SPADse), width=.4, position=pd) +
+    geom_line(position=pd) +
+    geom_point(position=pd, size =2) +
+    scale_x_discrete("Host Variety") +
+    scale_color_manual("", values = micro_color_neg) +
+    scale_y_continuous("Relative Chlorophyll Content")
+#tiff("./figures/SPAD-means.tiff", width = 10/2.54, height = 10/2.54, units="in", res=600)
+spad.p
+#dev.off()
+
+```
+
+### All Phys Plots
+```{r, echo = FALSE, results = 'hide', fig.width = 8}
+# make a long format dataset
+phys_long <- melt(phys.trt, id.vars = c('hostVar', 'bacteria'), 
+  measure.vars = c("Phi2means", "PhiNOmeans", "PhiNPQmeans", 
+                   "ECStmeans", "vH.means", "gH.means",  
+                   "leaf_thicknessmeans", "SPADmeans"),
+  variable.name = 'Measure', value.name = 'Phys')
+levels(phys_long$Measure) <- c("A) Phi2", "B) PhiNO", "C) PhiNPQ", 
+                   "D) ECSt", "E) vH+", "F) gH+",  
+                   "G) Leaf Thickness", " H) Rel. Chlorophyll")
+
+phys_long2 <- melt(phys.trt, id.vars = c('hostVar', 'bacteria'), 
+  measure.vars = c("Phi2se", "PhiNOse", "PhiNPQse", 
+                   "ECStse", "vH.se", "gH.se",  
+                   "leaf_thicknessse", "SPADse"),
+  variable.name = 'Measure', value.name = 'SE')
+levels(phys_long2$Measure) <- c("A) Phi2", "B) PhiNO", "C) PhiNPQ", 
+                   "D) ECSt", "E) vH+", "F) gH+",  
+                   "G) Leaf Thickness", " H) Rel. Chlorophyll")
+phys_long <- merge(phys_long, phys_long2, by = c("hostVar", "bacteria", "Measure") )
+
+pd <- position_dodge(0.25)
+#tiff("./figures/AllPhys-means.tiff", width = 7, height = 7, units="in", res=600)
+ggplot(phys_long, 
+        aes(y = Phys, x = hostVar, group = bacteria, colour = bacteria)) +
+    facet_wrap(~Measure, ncol = 3, scales = "free_y") +
+    geom_errorbar(aes(ymin=Phys-SE,
+                      ymax=Phys+SE), width=.4, position=pd) +
+    geom_line(position=pd) +
+    geom_point(position=pd, size =1.8) +
+    scale_x_discrete("Host Variety") +
+    scale_y_continuous("") +
+    scale_color_manual("", values = micro_color_neg) +
+    theme(legend.position = 'bottom') +
+    guides(colour = guide_legend(nrow = 2))
+#dev.off()
+
+```
+
+```{r, echo = FALSE, results = 'hide', fig.width = 8}
+# # for poster/presentations
+# long1 <- melt(phys.trt, id.vars = c('hostVar', 'bacteria'), 
+#   measure.vars = c("leaf_thicknessmeans", "SPADmeans", "gH.means"),
+#   variable.name = 'Measure', value.name = 'Phys')
+# levels(long1$Measure) <- c("Leaf Thickness", "Rel. Chlorophyll", "gH+")
+# 
+# long2 <- melt(phys.trt, id.vars = c('hostVar', 'bacteria'), 
+#   measure.vars = c("leaf_thicknessse", "SPADse", "gH.se"),
+#   variable.name = 'Measure', value.name = 'SE')
+# levels(long2$Measure) <- c("Leaf Thickness", "Rel. Chlorophyll", "gH+")
+# long3 <- merge(long1, long2, by = c("hostVar", "bacteria", "Measure") )
+# 
+# #tiff("./figures/Morphtraits-means.tiff", width = 7, height = 3, units="in", res=600)
+# ggplot(long3, aes(y = Phys, x = hostVar, group = bacteria, colour = bacteria)) +
+#     facet_wrap(~Measure, ncol = 3, scales = "free_y") +
+#     geom_errorbar(aes(ymin=Phys-SE,
+#                       ymax=Phys+SE), width=.4, position=pd) +
+#     geom_line(position=pd) + geom_point(position=pd, size =1.8) +
+#     scale_x_discrete("Host Variety") + scale_y_continuous("") +
+#     scale_color_manual("", values = micro_color_neg) +
+#     theme(legend.position = 'bottom') + guides(colour = guide_legend(nrow = 1))
+# #dev.off()
+```
+
+
+
+### Disease by Variety only
+```{r, echo = FALSE, results = 'hide'}
+dpiVar <- ggplot(disease4, aes( y = disPerc.d17, x = hostVar, colour = hostVar)) +
+    geom_boxplot() + geom_jitter(width = 0.1) + guides(colour = 'none') +
+    scale_y_continuous("% Infected Spikelets 17dpi")
+# ggplot(disease4, aes( y = head.mass, x = hostVar, colour = hostVar)) +
+#     geom_boxplot() + geom_jitter(width = 0.1) + guides(colour = 'none')
+#tiff("./figures/Disease by Variety -Neg.tiff", width = 10/2.54, height = 10/2.54, units="in", res=600)
+dpiVar
+#dev.off()
+
+disVar <- ggplot(disease4, aes( y = AUDPC, x = hostVar, colour = hostVar)) +
+    geom_boxplot() + geom_jitter(width = 0.1) + guides(colour = 'none') +
+    scale_y_continuous("AUDPC")
+# ggplot(disease4, aes( y = head.mass, x = hostVar, colour = hostVar)) +
+#     geom_boxplot() + geom_jitter(width = 0.1) + guides(colour = 'none')
+#tiff("./figures/AUDPC by Variety -Neg.tiff", width = 10/2.54, height = 10/2.54, units="in", res=600)
+disVar
+#dev.off()
+
+toxVar <- ggplot(disease4, aes( y = ugDON_per_g, x = hostVar, colour = hostVar)) +
+    geom_boxplot() + geom_jitter(width = 0.1) + guides(colour = 'none') +
+    scale_y_continuous("DON (ug/g)")
+#tiff("./figures/Toxin by Variety -Neg.tiff", width = 10/2.54, height = 10/2.54, units="in", res=600)
+toxVar
+#dev.off()
+
+fusVar <- ggplot(disease4, aes( y = FgTa, x = hostVar, colour = hostVar)) +
+    geom_boxplot() + geom_jitter(width = 0.1) + guides(colour = 'none') +
+    scale_y_continuous(expression(paste(italic("Fusarium")," Load")))
+#tiff("./figures/Fusarium Load by Variety -Neg.tiff", width = 10/2.54, height = 10/2.54, units="in", res=600)
+fusVar
+#dev.off()
+
+donfgVar <- ggplot(disease4, aes( y = DON_per_Fg, x = hostVar, colour = hostVar)) +
+    geom_boxplot() + geom_jitter(width = 0.1) + guides(colour = 'none') +
+    scale_y_continuous("DON per unit Fusarium")
+#tiff("./figures/Don per Fg by Variety.tiff", width = 10/2.54, height = 10/2.54, units="in", res=600)
+donfgVar
+#dev.off()
+```
+
+### AUDPC
+```{r, echo = FALSE, results = 'hide'}
+dis.trt2 <- droplevels(dis.trt[dis.trt$microTrt != "NEG",])
+
+pd <- position_dodge(0.25) 
+audpc.p <- ggplot(dis.trt2, 
+        aes(y = AUDPCmeans, x = hostVar, group = microTrt, colour = microTrt)) +
+    geom_errorbar(aes(ymin=AUDPCmeans-AUDPCse,
+                      ymax=AUDPCmeans+AUDPCse), width=.4, position=pd) +
+    geom_line(position=pd) +
+    geom_point(position=pd, size =2) +
+    scale_x_discrete("Host Variety") +
+    scale_color_manual("", values = micro_color) +
+    scale_y_continuous("AUDPC")
+#tiff("./figures/AUDPC-means -Neg.tiff", width = 10/2.54, height = 10/2.54, units="in", res=600)
+#audpc.p
+#dev.off()
+
+```
+
+### Toxin
+```{r, echo = FALSE, results = 'hide'}
+tox.p <- ggplot(dis.trt2, 
+        aes(y = DONmeans, x = hostVar, group = microTrt, colour = microTrt)) +
+    geom_errorbar(aes(ymin=DONmeans-DONse,
+                      ymax=DONmeans+DONse), width=.4, position=pd) +
+    geom_line(position=pd) +
+    geom_point(position=pd, size =2) +
+    scale_x_discrete("Host Variety") +
+    scale_color_manual("", values = micro_color) +
+    scale_y_continuous(expression(paste("DON ",mu,"g ", g^{-1})),
+                       trans = "sqrt", breaks = c(10,20, 50,100))
+#tiff("./figures/Toxin-means -Neg.tiff", width = 10/2.54, height = 10/2.54, units="in", res=600)
+#tox.p
+#dev.off()
+
+```
+
+### FgTa
+```{r, echo = FALSE, results = 'hide'}
+fgta.p <- ggplot(dis.trt2, 
+        aes(y = FgTameans, x = hostVar, group = microTrt, colour = microTrt)) +
+    geom_errorbar(aes(ymin=FgTameans-FgTase,
+                      ymax=FgTameans+FgTase), width=.4, position=pd) +
+    geom_line(position=pd) +
+    geom_point(position=pd, size =2) +
+    scale_x_discrete("Host Variety") +
+    scale_color_manual("", values = micro_color) +
+    scale_y_continuous(expression(paste(italic("Fusarium")," Load")), 
+                       trans = 'log', breaks = c(.5,1,2,5))
+#tiff("./figures/FusariumLoad-means -Neg.tiff", width = 10/2.54, height = 10/2.54, units="in", res=600)
+#fgta.p
+#dev.off()
+
+```
+
+### All Disease Plots
+```{r, echo = FALSE, results = 'hide', fig.width = 8}
+# make a long format dataset
+dis_long <- melt(dis.trt2, id.vars = c('hostVar', 'microTrt'), 
+  measure.vars = c("AUDPCmeans", "DONmeans", "FgTameans"),
+  variable.name = 'Measure', value.name = 'Disease')
+levels(dis_long$Measure) <- c("A) AUDPC", "B) DON", "C) Fusarium load")
+dis_long2 <- melt(dis.trt2, id.vars = c('hostVar', 'microTrt'), 
+  measure.vars = c("AUDPCse", "DONse", "FgTase"),
+  variable.name = 'Measure', value.name = 'SE')
+levels(dis_long2$Measure) <- c("A) AUDPC", "B) DON", "C) Fusarium load")
+dis_long <- merge(dis_long, dis_long2, by = c("hostVar", "microTrt", "Measure") )
+
+pd <- position_dodge(0.25) 
+
+#tiff("./figures/AllDisease-means-Neg-alt.tiff", width = 7, height = 3.16, units="in", res=600)
+ggplot(dis_long, 
+        aes(y = Disease, x = hostVar, group = microTrt, colour = microTrt)) +
+    facet_wrap(~Measure, ncol = 3, scales = "free_y") +
+    geom_errorbar(aes(ymin=Disease-SE,
+                      ymax=Disease+SE), width=.4, position=pd) +
+    geom_line(position=pd) +
+    geom_point(position=pd, size =2) +
+    scale_x_discrete("Host Variety") +
+    scale_y_continuous("") +
+    scale_color_manual("", values = micro_color) +
+    theme(legend.position = 'bottom') +
+    guides(colour = guide_legend(nrow = 1))
+#dev.off()    
+```
+
+
+### DON per Fg
+```{r, echo = FALSE, results = 'hide'}
+donfg.means <- data.frame(hostVar = c(levels(disease4$hostVar)),
+           bacteria = c(rep(levels(disease4$microTrt), each = 2)),
+   reps = c(table(disease4$hostVar, disease4$microTrt)),
+   mean = c(tapply(   disease4$DON_per_Fg,      list(disease4$hostVar, disease4$microTrt), mean)),
+   sd = c(tapply(     disease4$DON_per_Fg,      list(disease4$hostVar, disease4$microTrt), sd)))
+donfg.means$se <- (donfg.means$sd)/sqrt(donfg.means$reps)
+donfg.means$bacteria <- as.factor(donfg.means$bacteria); 
+donfg.means$bacteria <- factor(donfg.means$bacteria, 
+            levels = c("NEG", "A30", "Q16", "Q22", "W14", "Y108", "Y11", "Y2", "POS"))
+
+pd <- position_dodge(0.25) 
+donfgMeans <- ggplot(donfg.means, 
+       aes(y = mean, x = hostVar, group = bacteria, colour = bacteria)) +
+    geom_errorbar(aes(ymin=mean-se, ymax=mean+se), width=.4, position=pd) +
+    geom_line(position=pd) +
+    geom_point(position=pd, size =2) +
+    scale_x_discrete("Host Variety") +
+    scale_color_manual("Bacteria", values = micro_color) +
+    scale_y_continuous("DON per unit Fusarium")
+#tiff("./figures/DONperFg-means.tiff", width = 10/2.54, height = 10/2.54, units="in", res=600)
+donfgMeans
+#dev.off()
+
+```
+
+
+### DON vs. Fusarium Biomass
+```{r, echo = FALSE, results = 'hide'}
+host.means <- data.frame(hostVar = c(levels(disease4$hostVar)),
+   reps = c(table(disease4$hostVar)),
+   FgTa.mean = c(tapply(   disease4$FgTa,      disease4$hostVar, mean)),
+   FgTa.sd = c(tapply(     disease4$FgTa,      disease4$hostVar, sd)),
+   DON.mean = c(tapply(   disease4$ugDON_per_g,      disease4$hostVar, mean)),
+   DON.sd = c(tapply(     disease4$ugDON_per_g,      disease4$hostVar, sd))  )
+host.means$FgTa.se <- (host.means$FgTa.sd)/sqrt(host.means$reps)
+host.means$DON.se <- (host.means$DON.sd)/sqrt(host.means$reps)
+host.means$hostVar <- as.factor(host.means$hostVar); 
+
+DonLoad <- ggplot() + 
+    geom_point(data = disease4, size = 1.8,
+               aes(y = ugDON_per_g, x = FgTa, colour = factor(hostVar), shape = factor(hostVar))) + 
+    geom_errorbar(data = host.means,
+               aes(x = FgTa.mean, colour = factor(hostVar), 
+                   ymin=DON.mean-DON.se, ymax=DON.mean+DON.se), width=.15, size = 1.5) +
+    geom_errorbarh(data = host.means,
+               aes(y = DON.mean, colour = factor(hostVar),
+                   xmin=FgTa.mean-FgTa.se, xmax=FgTa.mean+FgTa.se), height=.3, size = 1.5) +
+    geom_point(data = host.means, 
+               aes(y = DON.mean, x = FgTa.mean, shape = factor(hostVar)), 
+               size = 3) +
+    scale_colour_discrete("Variety") + scale_shape_discrete("Variety") +
+    scale_x_continuous(expression(paste(italic("Fusarium")," Load")), trans = 'log', breaks = c(.1,1,10)) +
+    scale_y_continuous("DON (ug/g)", trans = 'sqrt')
+
+#tiff("./figures/FusariumLoad-DON correlation -Neg.tiff", width = 10, height = 10, units="in", res=600)
+DonLoad
+#dev.off()
+
+```
+
+
+# Does the DHA results from Whitaker & Bakker 2019 predict disease in either host?
+```{r}
+dha <- data.frame('bacteria' = c('Q22', 'Y108', 'Q16', 'Y2', 'W14', 'Y11', 'A30'),
+              'DHA.rank' = c(1, 2, 3, 4, 5, 6, 7))
+dis.trt3 <- droplevels(dis.trt2[dis.trt2$microTrt != "POS",])
+disA <- dis.trt3[dis.trt3$hostVar == "Alsen",]
+disN <- dis.trt3[dis.trt3$hostVar == "Norm",]
+disA <- merge(disA, dha, by.x = 'microTrt', by.y = 'bacteria')
+disN <- merge(disN, dha, by.x = 'microTrt', by.y = 'bacteria')
+
+# test relationship using linear model
+modA <- lm(FgTameans ~ DHA.rank, data = disA) 
+modN <- lm(FgTameans ~ DHA.rank, data = disN)
+Anova(modA) #P = 0.3384
+Anova(modN) #P = 0.8992
+
+# test relationship using Spearman's rank correlation coefficient
+cor.test(x = disA$DHA.rank, y = disA$FgTameans, method = 'spearman') #p-value = 0.6615
+cor.test(x = disN$DHA.rank, y = disN$FgTameans, method = 'spearman') #p-value = 0.9063
+```
+
+### Alsen
+```{r}
+ggplot(disA, aes(x = DHA.rank, y = FgTameans, color = microTrt)) +
+    geom_point(size = 3) +
+    scale_color_manual(values = micro_color_neg[-1])
+```
+
+### Norm
+```{r}
+ggplot(disN, aes(x = DHA.rank, y = FgTameans, color = microTrt)) +
+    geom_point(size = 3) +
+    scale_color_manual(values = micro_color_neg[-1])
+
+```
+
+
+
+
+# End - Session Info
+```{r}
+sessionInfo()
+```
+
