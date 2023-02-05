@@ -1,7 +1,7 @@
 # "Biocontrol impacts on wheat physiology and Fusarium head blight outcomes are bacterial endophyte strain- and cultivar specific"
 ### Whitaker, B.K., Vaughan, M.M., McCormick, S.P.
 
-DOI here
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.7607665.svg)](https://doi.org/10.5281/zenodo.7607665)
 
 This repository includes the R code, data files, and small scripts to supplement the manuscript by Whitaker et al. "Biocontrol impacts on wheat physiology and Fusarium head blight outcomes are bacterial endophyte strain- and cultivar specific".
 
